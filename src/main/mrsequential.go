@@ -6,9 +6,11 @@ package main
 // go run mrsequential.go wc.so pg*.txt
 //
 
-import "fmt"
-import "6.824/mr"
-import "plugin"
+import (
+	"fmt"
+	"plugin"
+)
+import "6.824/src/mr"
 import "os"
 import "log"
 import "io/ioutil"
