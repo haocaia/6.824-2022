@@ -35,19 +35,26 @@ func (rf *Raft) AppendEntriesRPC(args *AppendEntriesArgs, reply *AppendEntriesRe
 		return
 	}
 
+
 	// 一个心跳，
 	if args.Entries.len() == 0 {
 		reply.Success = true
 		reply.CurrentTerm = rf.currentTerm
+		if args.LeaderCommit > rf.commitIndex {
+			rf.commitIndex = min(args.LeaderCommit, rf.logs.getLastLog().CurrentIndex)
+		}
 		return
 	}
 
+
+	//DPrintf("服务[%d]尝试添加日志[%d]后的内容", rf.me, args.PrevLogIndex)
 	ok := rf.logs.appendEntries(args)
 
 	reply.Success = ok
 	reply.CurrentTerm = rf.currentTerm
+	//DPrintf("服务[%d]收到Append包，leader的commitIndex[%d], commitIndex[%d]",rf.me,args.LeaderCommit, rf.logs.getLastLog().CurrentIndex)
 	if args.LeaderCommit > rf.commitIndex {
-		rf.commitIndex = min(args.LeaderCommit, args.Entries.getLastLog().CurrentIndex)
+		rf.commitIndex = min(args.LeaderCommit, rf.logs.getLastLog().CurrentIndex)
 	}
 	return
 }

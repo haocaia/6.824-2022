@@ -60,6 +60,7 @@ type Raft struct {
 
 	lastRPCTime time.Time
 	electionTime time.Duration
+	stateMachine chan ApplyMsg
 	// role
 	// LEADER:
 	// 定期发送心跳包（不包含log的AppendRPC）
@@ -182,7 +183,7 @@ func (rf *Raft) beforeElection() int {
 }
 
 func (rf *Raft) startElection(currentTerm int)  {
-	DPrintf("服务[%d]超时，正在发起第[%d]轮选举, 当前任期[%d]\n", rf.me, currentTerm,rf.currentTerm)
+	//DPrintf("服务[%d]超时，正在发起第[%d]轮选举, 当前任期[%d]\n", rf.me, currentTerm,rf.currentTerm)
 	if rf.currentTerm < currentTerm || rf.currentTerm == 0{
 		panic(errors.New("启动选举失败\n"))
 	}
@@ -224,7 +225,7 @@ func (rf *Raft) startElection(currentTerm int)  {
 	// 1. 选举过期了
 	// 2. 其他人选上了
 	if rf.currentTerm > currentTerm || rf.role != CANDIDATE {
-		DPrintf("[%d] 竞选[%d]失败, 当前任期[%d], 当前身份[%s], 选票[%d]",rf.me,currentTerm,rf.currentTerm,rf.role,numVote)
+		//DPrintf("[%d] 竞选[%d]失败, 当前任期[%d], 当前身份[%s], 选票[%d]",rf.me,currentTerm,rf.currentTerm,rf.role,numVote)
 		return
 	}
 
@@ -240,7 +241,7 @@ func (rf *Raft) startElection(currentTerm int)  {
 }
 
 func (rf *Raft) transferToCandidate(currentTerm int)  {
-	DPrintf("服务[%d]成为任期[%d]的candidate",rf.me,currentTerm)
+	//DPrintf("服务[%d]成为任期[%d]的candidate",rf.me,currentTerm)
 	if rf.role == CANDIDATE && currentTerm == rf.currentTerm && rf.votedFor != nil {
 		return
 	}
@@ -272,7 +273,7 @@ func (rf *Raft) transferToLeader()  {
 }
 
 func (rf *Raft) transferToFollower(currentTerm int)  {
-	DPrintf("服务[%d]成为任期[%d]的follower",rf.me,currentTerm)
+	//DPrintf("服务[%d]成为任期[%d]的follower",rf.me,currentTerm)
 	rf.mu.Lock()
 	rf.role = FOLLOWER
 	if currentTerm < rf.currentTerm {
@@ -285,6 +286,26 @@ func (rf *Raft) transferToFollower(currentTerm int)  {
 
 func (rf *Raft) sendHeartBeatToAll()  {
 	//rf.lastRPCTime = time.Now()
+	// 检查commitIndex是否需要更新
+	for rf.role == LEADER {
+		commitIndex := rf.commitIndex + 1
+		num := 0
+		for peer := range rf.peers {
+			if rf.matchIndex[peer] >= commitIndex && rf.logs.find(commitIndex).CurrentTerm == rf.currentTerm {
+				rf.mu.Lock()
+				num += 1
+				rf.mu.Unlock()
+			}
+		}
+		//DPrintf("日志[%d]的复制数为[%d]", commitIndex, num)
+		if num > len(rf.peers) / 2 {
+			rf.commitIndex = commitIndex
+			DPrintf("日志[%d]已经多数复制成功, 服务[%d]的commitIndex现在是[%d]", commitIndex, rf.me, rf.commitIndex)
+		} else {
+			break
+		}
+	}
+
 	for peer := range rf.peers {
 		if peer == rf.me {
 			continue
@@ -314,11 +335,12 @@ func (rf *Raft) sendHeartBeat(server int)  {
 		rf.transferToFollower(reply.CurrentTerm)
 	}
 }
+
 func (rf *Raft) voteToServer(args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	if rf.votedFor == nil {
-		DPrintf("服务[%d]尝试任期[%d]投票给[%d], 当前票[%v]\n",rf.me,args.CurrentTerm,args.CandidateIndex, rf.votedFor)
+		//DPrintf("服务[%d]尝试任期[%d]投票给[%d], 当前票[%v]\n",rf.me,args.CurrentTerm,args.CandidateIndex, rf.votedFor)
 	} else {
-		DPrintf("服务[%d]尝试任期[%d]投票给[%d], 当前票[%v]\n",rf.me,args.CurrentTerm,args.CandidateIndex, *rf.votedFor)
+		//DPrintf("服务[%d]尝试任期[%d]投票给[%d], 当前票[%v]\n",rf.me,args.CurrentTerm,args.CandidateIndex, *rf.votedFor)
 	}
 	if args.CurrentTerm < rf.currentTerm {
 		reply.VotedMe = false
@@ -333,7 +355,7 @@ func (rf *Raft) voteToServer(args *RequestVoteArgs, reply *RequestVoteReply) boo
 	} else {
 		reply.VotedMe = false
 	}
-	DPrintf("服务[%d]在[%d]轮投票给[%d]结果[%v]",rf.me,args.CurrentTerm,args.CandidateIndex,reply.VotedMe)
+	//DPrintf("服务[%d]在[%d]轮投票给[%d]结果[%v]",rf.me,args.CurrentTerm,args.CandidateIndex,reply.VotedMe)
 	return true
 }
 //
@@ -429,11 +451,66 @@ func (rf *Raft) SendRequestVoteRPC(server int) (bool, *RequestVoteReply) {
 }
 
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	DPrintf("sendRequestVote\n")
+	//DPrintf("sendRequestVote\n")
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	return ok
 }
 
+func (rf *Raft) tryCommit(server int)  {
+	// 只表示循环是否结束，不代表commit成功
+	end := false
+	for end == false && rf.role == LEADER{
+		nextCommitIndex := rf.nextIndex[server]
+		// 要发日志之前的一个日志
+		prevLogIndex := rf.logs.indexAt(nextCommitIndex-1)
+		prevLog := rf.logs.get(prevLogIndex)
+		// 所有要发的日志
+		allLog := rf.logs.getFrom(nextCommitIndex)
+		args := &AppendEntriesArgs{
+			Term:         rf.currentTerm,
+			LeaderId:     rf.me,
+			PrevLogIndex: prevLog.CurrentIndex,
+			PrevLogTerm:  prevLog.CurrentTerm,
+			Entries:      allLog,
+			LeaderCommit: rf.commitIndex,
+		}
+		reply := &AppendEntriesReply{}
+
+		DPrintf("服务[%d]尝试给[%d]发送[%d]之后的log", rf.me, server, prevLog.CurrentIndex)
+		ok := rf.peers[server].Call("Raft.AppendEntriesRPC", args, reply)
+		DPrintf("服务[%d]尝试给[%d]添加[%d]之后的日志的结果[%v], [%v]", rf.me, server, prevLog.CurrentIndex, ok, reply.Success)
+		if ok == false {
+			// RPC失败，睡眠就行
+			time.Sleep(10 * time.Millisecond)
+		} else {
+			if reply.Success == true {
+				// 复制成功，更新nextIndex和matchIndex
+				end = true
+				rf.nextIndex[server] = allLog.getLastLog().CurrentIndex + 1
+				rf.matchIndex[server] = args.Entries.getLastLog().CurrentIndex
+				DPrintf("服务[%d]的nextIndex:[%d], matchIndex[%d]", server, rf.nextIndex[server], rf.matchIndex[server])
+			} else if reply.CurrentTerm > rf.currentTerm {
+				// 不是leader
+				end = true
+				rf.transferToFollower(reply.CurrentTerm)
+			} else if reply.Success == false {
+				// 日志不统一， 减少nextIndex
+				rf.nextIndex[server] -= 1
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	}
+
+}
+
+func (rf *Raft) applyCommandToMachine(msg ApplyMsg)  {
+	select {
+		case rf.stateMachine <- msg:
+			rf.lastApplied += 1
+			DPrintf("服务[%d]成功将日志[%d]写入状态机", rf.me, msg.Command)
+	}
+	return
+}
 
 //
 // the service using Raft (e.g. a k/v server) wants to start
@@ -450,12 +527,56 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
+	/**
+		1. command 加到leader的末尾
+		2. 并发 发送给follower复制
+		3. 安全复制后，leader送到state machine, 然后返回结果
+		4. (3)中如果有follower慢了/挂了，无限循环尝试复制
+	 */
 	index := -1
 	term := -1
 	isLeader := true
-
 	// Your code here (2B).
+	// 不是Leader, 返回false
+	if rf.role != LEADER {
+		isLeader = false
+		return index, term, isLeader
+	}
 
+
+	// 1
+	entryToAppend := Log{Entries: []Entry{{
+		Command:      command,
+		CurrentTerm:  rf.currentTerm,
+		CurrentIndex: rf.logs.getLastLog().CurrentIndex + 1,
+	}}}
+	index = entryToAppend.Entries[0].CurrentIndex
+	term = entryToAppend.Entries[0].CurrentTerm
+	isLeader = true
+
+	// command加到leader日志末尾
+	rf.logs.appendLast(entryToAppend)
+	// 更新leader自己的nextIndex和matchIndex
+	rf.matchIndex[rf.me] = index
+	rf.nextIndex[rf.me] = index + 1
+	// 并发请求commit
+	for peer := range rf.peers {
+		if peer == rf.me {
+			continue
+		}
+		go rf.tryCommit(peer)
+	}
+
+	// leader直接返回结果
+	rf.applyCommandToMachine(ApplyMsg{
+		CommandValid:  true,
+		Command:       command,
+		CommandIndex:  index,
+		SnapshotValid: false, // todo
+		Snapshot:      nil, // todo
+		SnapshotTerm:  0, // todo
+		SnapshotIndex: 0, // todo
+	})
 
 	return index, term, isLeader
 }
@@ -479,6 +600,29 @@ func (rf *Raft) Kill() {
 func (rf *Raft) killed() bool {
 	z := atomic.LoadInt32(&rf.dead)
 	return z == 1
+}
+
+func (rf *Raft) listenStateMachine()  {
+	// todo
+	for rf.killed() == false {
+		if rf.commitIndex > rf.lastApplied {
+			rf.lastApplied += 1
+			DPrintf("服务[%d]将日志[%d]加入状态机", rf.me, rf.lastApplied)
+			index := rf.lastApplied
+			entry := rf.logs.find(index)
+			msg := ApplyMsg{
+				CommandValid:  true,
+				Command:       entry.Command,
+				CommandIndex:  entry.CurrentIndex,
+				SnapshotValid: false, //todo
+				Snapshot:      nil, //todo
+				SnapshotTerm:  0, //todo
+				SnapshotIndex: 0, //todo
+			}
+			rf.stateMachine <- msg
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // The ticker go routine starts a new election if this peer hasn't received
@@ -526,6 +670,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// Your initialization code here (2A, 2B, 2C).
 	// rf init
 	rf.role = FOLLOWER //没有任何选举
+	rf.stateMachine = applyCh
 	// persistent, 以下参数需要在readPersist中读取和保存
 	rf.currentTerm = 0 // 初始为0，readPersist后会更改
 	rf.votedFor = nil
@@ -541,7 +686,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
-
+	go rf.listenStateMachine()
 
 	return rf
 }
