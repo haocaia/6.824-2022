@@ -167,7 +167,7 @@ func (cfg *config) applier(i int, applyCh chan ApplyMsg) {
 			err_msg, prevok := cfg.checkLogs(i, m)
 			cfg.mu.Unlock()
 			if m.CommandIndex > 1 && prevok == false {
-				err_msg = fmt.Sprintf("server %v apply out of order %v", i, m.CommandIndex)
+				err_msg = fmt.Sprintf("1. server %v apply out of order %v", i, m.CommandIndex)
 			}
 			if err_msg != "" {
 				log.Fatalf("apply error: %v", err_msg)
@@ -236,7 +236,7 @@ func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 				err_msg, prevok = cfg.checkLogs(i, m)
 				cfg.mu.Unlock()
 				if m.CommandIndex > 1 && prevok == false {
-					err_msg = fmt.Sprintf("server %v apply out of order %v", i, m.CommandIndex)
+					err_msg = fmt.Sprintf("2. server %v apply out of order %v", i, m.CommandIndex)
 				}
 			}
 
