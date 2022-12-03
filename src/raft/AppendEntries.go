@@ -14,6 +14,7 @@ type AppendEntriesArgs struct {
 type AppendEntriesReply struct {
 	CurrentTerm int
 	Success     bool
+	LatestMatchIndex int
 }
 
 //接受RPC
@@ -26,41 +27,56 @@ func (rf *Raft) AppendEntriesRPC(args *AppendEntriesArgs, reply *AppendEntriesRe
 		return
 	}
 
+
 	rf.lastRPCTime = time.Now()
 	// 产生了新的Leader
 	if args.Term > rf.currentTerm {
 		rf.transferToFollower(args.Term)
-		reply.CurrentTerm = rf.currentTerm
-		reply.Success = false
-		return
 	}
-
-
-	// 一个心跳，
-	if args.Entries.len() == 0 {
-		reply.Success = true
-		reply.CurrentTerm = rf.currentTerm
-		if args.LeaderCommit > rf.commitIndex {
-			rf.commitIndex = min(args.LeaderCommit, rf.logs.getLastLog().CurrentIndex)
-		}
-		return
-	}
-
-
-	//DPrintf("服务[%d]尝试添加日志[%d]后的内容", rf.me, args.PrevLogIndex)
-	ok := rf.logs.appendEntries(args)
-
-	reply.Success = ok
+	// 检查PrevLog是否存在
+	exist, index := rf.logs.checkPrevLogExist(args.PrevLogTerm, args.PrevLogIndex)
 	reply.CurrentTerm = rf.currentTerm
-	//DPrintf("服务[%d]收到Append包，leader的commitIndex[%d], commitIndex[%d]",rf.me,args.LeaderCommit, rf.logs.getLastLog().CurrentIndex)
+	reply.Success = exist
+	if exist == false {
+		reply.LatestMatchIndex = rf.logs.findLatestMatchIndex(args.PrevLogTerm, args.PrevLogIndex)
+		//DPrintf("服务[%d]匹配leader log:[%d][%d]失败，当前日志:\n%s", rf.me, args.PrevLogTerm, args.PrevLogIndex, rf.logs.String())
+		return
+	}
+	//DPrintf("服务[%d]收到append, prev term and index=[%d] [%d], exist=[%v], index=[%d], 我的日志:[%v]",rf.me,args.PrevLogTerm,args.PrevLogIndex,exist,index,rf.logs)
+
+	rf.mu.Lock()
+	//DPrintf("before:服务[%d]尝试添加日志[%d]后的内容", rf.me, args.PrevLogIndex)
+	// !! 当且仅当follower的日志与append中 **存在** 的日志冲突时才截断，
+	if args.Entries.len() > 0 {
+		rf.logs.appendLog(index+1, args.Entries)
+		//DPrintf("服务[%d]添加日志到index:[%d]之后,当前日志\n%s",rf.me, index, rf.logs.String())
+	}
+
+
+	rf.mu.Unlock()
+
 	if args.LeaderCommit > rf.commitIndex {
+		rf.mu.Lock()
 		rf.commitIndex = min(args.LeaderCommit, rf.logs.getLastLog().CurrentIndex)
+		//DPrintf("服务[%d]更新commitIndex:[%d], leader commit: [%d], 当前日志:\n%s",rf.me,rf.commitIndex,args.LeaderCommit,rf.logs.String())
+		rf.mu.Unlock()
+		//rf.mu.Lock()
+		//DPrintf("服务[%d]的commitIndex为[%d], lastapply=[%d], last log index=[%v], first log index=[%s]", rf.me, rf.commitIndex, rf.lastApplied, rf.logs.getLastLog(), rf.logs.getFirstLog().String())
+		//rf.mu.Unlock()
 	}
 	return
 }
 
 func min(a, b int) int {
 	if a < b {
+		return a
+	}
+	return b
+}
+
+
+func max(a, b int) int {
+	if a > b {
 		return a
 	}
 	return b
