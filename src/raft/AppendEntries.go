@@ -49,12 +49,9 @@ func (rf *Raft) AppendEntriesRPC(args *AppendEntriesArgs, reply *AppendEntriesRe
 	// !! 当且仅当follower的日志与append中 **存在** 的日志冲突时才截断，
 	if args.Entries.len() > 0 {
 		rf.logs.appendLog(index+1, args.Entries)
-		//DPrintf("服务[%d]添加日志到index之后,当前日志\n%s",rf.me,rf.logs.String())
+		//DPrintf("服务[%d]添加日志到index:[%d]之后,当前日志\n%s",rf.me, index, rf.logs.String())
 	}
 
-	//if args.Entries.len() > 0 {
-	//	DPrintf("服务[%d]现在的日志为%v", rf.me, rf.logs)
-	//}
 
 	rf.mu.Unlock()
 

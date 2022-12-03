@@ -15,7 +15,7 @@ const (
 	LEADER          = "leader"
 	FOLLOWER        = "follower"
 	CANDIDATE       = "candidate"
-	ElectionMinLimit = 100
+	ElectionMinLimit = 200
 	ElectionWeight = 150
 	ElectionTimeout = (ElectionWeight + ElectionMinLimit) * time.Millisecond // 1000Millsecond = 1秒, 超时的最低时限
 )
@@ -278,7 +278,8 @@ func (rf *Raft) transferToLeader()  {
 		rf.matchIndex[peer] = 0
 	}
 	rf.mu.Unlock()
-
+	go rf.listenCommit()
+	go rf.checkCommitIndex()
 }
 
 func (rf *Raft) transferToFollower(currentTerm int)  {
@@ -294,48 +295,34 @@ func (rf *Raft) transferToFollower(currentTerm int)  {
 }
 
 func (rf *Raft) checkCommitIndex()  {
-	for rf.role == LEADER {
-		rf.mu.Lock()
-		commitIndex := rf.commitIndex + 1
-		commitTerm := rf.logs.find(commitIndex).CurrentTerm
-		for commitTerm < rf.currentTerm && commitTerm != -1{
-			commitIndex += 1
-		}
-		rf.mu.Unlock()
-		num := 0
-		// !! leader 不允许提交 **不属于他任期** 的log
-		if rf.logs.getLastLog().CurrentIndex < commitIndex {
-			//DPrintf("leader last log: %d, try commit index: %d", rf.logs.getLastLog().CurrentIndex, commitIndex)
-			break
-		}
-		for peer := range rf.peers {
-			//DPrintf("服务[%d]的matchIndex:%d, leader commit: %d, try commit: %d",peer,rf.matchIndex[peer], rf.commitIndex, commitIndex)
-			if rf.matchIndex[peer] >= commitIndex {
-				rf.mu.Lock()
-				num += 1
-				//DPrintf("服务[%d]已经将日志[%d]提交, match:[%d]。日志总提交数:%d",peer, commitIndex, rf.matchIndex[peer], num)
-				rf.mu.Unlock()
+	currentTerm := rf.currentTerm
+	for rf.role == LEADER && rf.currentTerm == currentTerm {
+		nextCommitIndex := rf.logs.getLastLog().CurrentIndex
+		totalNum := len(rf.peers)
+		for rf.role == LEADER && rf.logs.find(nextCommitIndex).CurrentTerm == currentTerm && rf.commitIndex < nextCommitIndex{
+			num := 0
+			for peer := range rf.peers {
+				//DPrintf("服务[%d]的match index:%d", peer, rf.matchIndex[peer])
+				if rf.matchIndex[peer] >= nextCommitIndex {
+					num += 1
+				}
+			}
+			//DPrintf("日志:[%d] 已经被%d个服务复制", nextCommitIndex, num)
+			if num > totalNum / 2 {
+				rf.commitIndex = max(rf.commitIndex, nextCommitIndex)
+				break
+			} else {
+				nextCommitIndex -= 1
 			}
 		}
-		//DPrintf("日志[%d]的复制数为[%d]", commitIndex, num)
-		if num > len(rf.peers) / 2 &&
-			rf.role == LEADER {
-			// 不加锁了，写个max吧， commitIndex单增
-			rf.commitIndex = max(rf.commitIndex, commitIndex)
-			//rf.applyCommandToMachine()
-			//DPrintf("服务[%d],日志[%d]已经多数复制成功, 服务[%d]的commitIndex现在是[%d]", rf.me, commitIndex, rf.me, rf.commitIndex)
-		} else {
-			//DPrintf("服务[%d],日志[%d]复制失败, num: %d, role: %s", rf.me, commitIndex, num, rf.role)
-			break
-			//time.Sleep(100*time.Millisecond)
-		}
+
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
 func (rf *Raft) sendHeartBeatToAll()  {
 	//rf.lastRPCTime = time.Now()
 	// 检查commitIndex是否需要更新
-	go rf.checkCommitIndex()
 
 	for peer := range rf.peers {
 		if peer == rf.me {
@@ -508,61 +495,72 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
-func (rf *Raft) tryCommit(server int)  {
-	// 只表示循环是否结束，不代表commit成功
+func (rf *Raft) tryCommit(server int, currentTerm int) {
 	end := false
-	for end == false && rf.role == LEADER {
+	for end == false && rf.role == LEADER && rf.currentTerm == currentTerm {
 		rf.mu.Lock()
 		nextCommitIndex := rf.nextIndex[server]
-		//DPrintf("server[%d]的nextCommitIndex:[%d]",server, rf.nextIndex[server])
-		// 要发日志之前的一个日志
-		prevLog := rf.logs.find(nextCommitIndex - 1)
-		// 所有要发的日志
-		allLog := rf.logs.getFrom(nextCommitIndex)
-		rf.mu.Unlock()
+		prevCommitIndex := nextCommitIndex - 1
+		prevLog := rf.logs.find(prevCommitIndex)
+
 		args := &AppendEntriesArgs{
-			Term:         rf.currentTerm,
+			Term:         currentTerm,
 			LeaderId:     rf.me,
 			PrevLogIndex: prevLog.CurrentIndex,
 			PrevLogTerm:  prevLog.CurrentTerm,
-			Entries:      allLog,
+			Entries:      rf.logs.getFrom(nextCommitIndex),
 			LeaderCommit: rf.commitIndex,
 		}
 		reply := &AppendEntriesReply{}
+		rf.mu.Unlock()
 
-		//DPrintf("leader[%d]尝试给[%d]发送[%d]之后的log:\n%s", rf.me, server, prevLog.CurrentIndex,allLog.String())
 		ok := rf.peers[server].Call("Raft.AppendEntriesRPC", args, reply)
-		//DPrintf("服务[%d]尝试给[%d]添加[%d]之后的日志的结果[%v], [%v]", rf.me, server, prevLog.CurrentIndex, ok, reply.Success)
+
 		if ok == false {
-			// RPC失败，睡眠就行
+			// rpc失败
 			time.Sleep(100 * time.Millisecond)
 		} else {
-			if reply.Success == true {
-				// 复制成功，更新nextIndex和matchIndex
-				end = true
-				rf.nextIndex[server] = max(allLog.getLastLog().CurrentIndex + 1, rf.nextIndex[server])
-				rf.matchIndex[server] = max(allLog.getLastLog().CurrentIndex, rf.matchIndex[server])
-
-				//DPrintf("服务[%d] 复制成功, next index=[%d], match index=[%d], 发送的日志:\n{%s}", server, rf.nextIndex[server], rf.matchIndex[server], allLog.String())
-				//DPrintf("服务[%d]的nextIndex:[%d], matchIndex[%d]", server, rf.nextIndex[server], rf.matchIndex[server])
-			} else if reply.CurrentTerm > rf.currentTerm {
-				end = true
-				//DPrintf("Term[%d]leader[%d]已经过时，新的term[%d]",rf.currentTerm,rf.me,reply.CurrentTerm)
-				rf.transferToFollower(reply.CurrentTerm)
-			} else if reply.Success == false {
-				// 日志不统一， 减少nextIndex
+			if reply.CurrentTerm > rf.currentTerm {
+				rf.transferToLeader()
+				return
+			} else if reply.Success == true {
 				rf.mu.Lock()
-				//DPrintf("服务[%d]的commit失败，LatestMatchIndex: [%d]", server, reply.LatestMatchIndex)
-				rf.nextIndex[server] -= 1
-				rf.matchIndex[server] = min(rf.matchIndex[server], rf.nextIndex[server] - 1)
-				//rf.nextIndex[server] = reply.LatestMatchIndex + 1
-				//rf.matchIndex[server] = reply.LatestMatchIndex
+				matchIndex := args.Entries.getLastLog().CurrentIndex
+				rf.nextIndex[server] = max(rf.nextIndex[server],  matchIndex + 1)
+				rf.matchIndex[server] = max(rf.matchIndex[server], matchIndex)
+				rf.mu.Unlock()
+				end = true
+			} else if reply.Success == false {
+				// 日志不同步
+				rf.mu.Lock()
+				rf.nextIndex[server] = min(rf.nextIndex[server], prevCommitIndex)
+				// TODO 当前matchIndex是未知状态
 				rf.mu.Unlock()
 				time.Sleep(100 * time.Millisecond)
+			} else {
+				panic("tryCommit")
 			}
 		}
 	}
+}
 
+func (rf *Raft) listenCommit()  {
+	for rf.killed() == false && rf.role == LEADER {
+		for server := range rf.peers {
+			if server == rf.me {
+				continue
+			}
+			if rf.role != LEADER {
+				return
+			}
+			latestLogIndex := rf.logs.getLastLog().CurrentIndex
+			if rf.matchIndex[server] == latestLogIndex {
+				continue
+			}
+			go rf.tryCommit(server, rf.currentTerm)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func (rf *Raft) applyCommandToMachine()  {
@@ -606,54 +604,30 @@ func (rf *Raft) applyCommandToMachine()  {
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	/**
-		1. command 加到leader的末尾
-		2. 并发 发送给follower复制
-		3. 安全复制后，leader送到state machine, 然后返回结果
-		4. (3)中如果有follower慢了/挂了，无限循环尝试复制
-	 */
-
 	index := -1
 	term := -1
 	isLeader := true
-	// Your code here (2B).
-	// 不是Leader, 返回false
-	if rf.role != LEADER {
-		isLeader = false
-		return index, term, isLeader
-	}
-	//DPrintf("Term[%d]leader[%d]收到command[%v],开始共识",rf.currentTerm, rf.me,command)
 
-	//1. 加锁保证index每次+1
+	if rf.role != LEADER {
+		return -1, -1, false
+	}
+
 	rf.mu.Lock()
-	entryToAppend := Log{Entries: []Entry{{
+	prevLog := rf.logs.getLastLog()
+	newLog := Log{Entries: []Entry{{
 		Command:      command,
 		CurrentTerm:  rf.currentTerm,
-		CurrentIndex: rf.logs.getLastLog().CurrentIndex + 1,
+		CurrentIndex: prevLog.CurrentIndex + 1,
 	}}}
-	// !!必须加锁，保证index每次+1
-	rf.logs.appendLastLog(entryToAppend)
-
-	index = entryToAppend.Entries[0].CurrentIndex
-	term = entryToAppend.Entries[0].CurrentTerm
-	isLeader = true
-	rf.mu.Unlock()
-	//DPrintf("leader服务[%d]将命令[%v]加入到末尾, 日志:\n%s", rf.me, command, rf.logs)
-	// 更新leader自己的nextIndex和matchIndex
-	rf.matchIndex[rf.me] = index
+	rf.logs.appendLastLog(newLog)
+	index = rf.logs.getLastLog().CurrentIndex
+	term = rf.logs.getLastLog().CurrentTerm
 	rf.nextIndex[rf.me] = index + 1
-	// 并发请求commit
-	for peer := range rf.peers {
-		if peer == rf.me {
-			continue
-		}
-		if rf.role != LEADER {
-			break
-		}
-		go rf.tryCommit(peer)
-	}
+	rf.matchIndex[rf.me] = index
+	//DPrintf("leader[%d]开始共识，index:[%d], 当前日志:\n%s", rf.me, index, rf.logs.String())
+	rf.mu.Unlock()
 
-	if rf.role != LEADER{
+	if rf.role != LEADER {
 		isLeader = false
 	}
 	return index, term, isLeader
@@ -736,7 +710,7 @@ func (rf *Raft) ticker() {
 			//不能阻塞, 选举中应该可以接受RPC请求
 			go rf.startElection(currentTerm)
 		}
-		time.Sleep(time.Millisecond * time.Duration(rand.Intn(100)))
+		time.Sleep(time.Millisecond * time.Duration(rand.Intn(200)))
 	}
 }
 

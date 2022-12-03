@@ -67,6 +67,7 @@ func (l *Log) get(index int) Entry {
 	return l.Entries[index]
 }
 
+// 给定日志currentLogIndex, 返回该日志以及之后的日志
 func (l *Log) getFrom(index int) Log {
 	i := l.len() - 1
 	for ;i >= 0 && l.Entries[i].CurrentIndex >= index;i-=1{}
