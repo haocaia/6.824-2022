@@ -14,7 +14,9 @@ type AppendEntriesArgs struct {
 type AppendEntriesReply struct {
 	CurrentTerm int
 	Success     bool
-	LatestMatchIndex int
+
+	ConflictTerm int
+	ConflictIndex int
 }
 
 //接受RPC
@@ -34,26 +36,25 @@ func (rf *Raft) AppendEntriesRPC(args *AppendEntriesArgs, reply *AppendEntriesRe
 		rf.transferToFollower(args.Term)
 	}
 	// 检查PrevLog是否存在
-	exist, index := rf.logs.checkPrevLogExist(args.PrevLogTerm, args.PrevLogIndex)
+	exist, index, conflictTerm, conflictIndex := rf.logs.checkPrevLogExist(args.PrevLogTerm, args.PrevLogIndex)
 	reply.CurrentTerm = rf.currentTerm
 	reply.Success = exist
 	if exist == false {
-		reply.LatestMatchIndex = rf.logs.findLatestMatchIndex(args.PrevLogTerm, args.PrevLogIndex)
-		//DPrintf("服务[%d]匹配leader log:[%d][%d]失败，当前日志:\n%s", rf.me, args.PrevLogTerm, args.PrevLogIndex, rf.logs.String())
+		reply.Success = false
+		reply.ConflictTerm = conflictTerm
+		reply.ConflictIndex = conflictIndex
 		return
 	}
 	//DPrintf("服务[%d]收到append, prev term and index=[%d] [%d], exist=[%v], index=[%d], 我的日志:[%v]",rf.me,args.PrevLogTerm,args.PrevLogIndex,exist,index,rf.logs)
-
-	rf.mu.Lock()
 	//DPrintf("before:服务[%d]尝试添加日志[%d]后的内容", rf.me, args.PrevLogIndex)
 	// !! 当且仅当follower的日志与append中 **存在** 的日志冲突时才截断，
 	if args.Entries.len() > 0 {
+		rf.mu.Lock()
 		rf.logs.appendLog(index+1, args.Entries)
+		rf.mu.Unlock()
+		rf.persist()
 		//DPrintf("服务[%d]添加日志到index:[%d]之后,当前日志\n%s",rf.me, index, rf.logs.String())
 	}
-
-
-	rf.mu.Unlock()
 
 	if args.LeaderCommit > rf.commitIndex {
 		rf.mu.Lock()
