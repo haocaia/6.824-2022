@@ -42,6 +42,14 @@ func (l *Log) len() int {
 
 // 查找currentIndex，并返回这个下标
 func (l *Log) indexAt(currentIndex int) int {
+	if currentIndex > l.getLastLog().CurrentIndex {
+		//return Entry{
+		//	Command:      -1,
+		//	CurrentTerm:  -2,
+		//	CurrentIndex: -2,
+		//}
+		panic(any(fmt.Sprintf("indexAt index: %d out of range: %d", currentIndex, l.getLastLog().CurrentIndex)))
+	}
 	index := l.len() - 1
 	// 找到第一个 index = currentIndex的位置, 找不到返回-1
 	for ; index >= 0 &&
@@ -53,10 +61,18 @@ func (l *Log) indexAt(currentIndex int) int {
 
 // 查找currentIndex，并返回这个entry
 func (l *Log) find(currentIndex int) Entry {
+	if currentIndex > l.getLastLog().CurrentIndex {
+		return Entry{
+			Command:      -1,
+			CurrentTerm:  -2,
+			CurrentIndex: -2,
+		}
+		//panic(any(fmt.Sprintf("find index: %d out of range: %d", currentIndex, l.getLastLog().CurrentIndex)))
+	}
+
 	index := l.len() - 1
 	for ; index >= 0 &&
 		l.Entries[index].CurrentIndex != currentIndex; index -= 1 {
-
 	}
 	if index < 0 {
 		return zeroEntry
@@ -76,9 +92,13 @@ func (l *Log) get(index int) Entry {
 }
 
 // 给定日志currentLogIndex, 返回该日志以及之后的日志
-func (l *Log) getFrom(index int) Log {
+func (l *Log) getFrom(currentIndex int) Log {
+	if currentIndex > l.getLastLog().CurrentIndex {
+		return Log{Entries: []Entry{}}
+		//panic(any(fmt.Sprintf("getFrom currentIndex: %d out of range: %d", currentIndex, l.getLastLog().CurrentIndex)))
+	}
 	i := l.len() - 1
-	for ; i >= 0 && l.Entries[i].CurrentIndex >= index; i -= 1 {
+	for ; i >= 0 && l.Entries[i].CurrentIndex >= currentIndex; i -= 1 {
 	}
 	log := Log{Entries: l.Entries[i+1:]}
 	return log
@@ -99,10 +119,16 @@ func (l *Log) getFirstLog() Entry {
 
 // index是要插入的位置，保留 0-index-1
 func (l *Log) appendLog(index int, entries Log) {
+	if index < 0 || index > l.len() {
+		panic(any(fmt.Sprintf("appendLog currentIndex: %d out of range: %d", index, l.len())))
+	}
 	l.Entries = append(l.Entries[:index], entries.Entries...)
 }
 
 func (l *Log) appendEntries(index int, entries []Entry) {
+	if index < 0 || index > l.len() {
+		panic(any(fmt.Sprintf("appendEntries currentIndex: %d out of range: %d", index, l.len())))
+	}
 	l.Entries = append(l.Entries[:index], entries...)
 }
 
