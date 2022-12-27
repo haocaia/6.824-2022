@@ -254,7 +254,8 @@ func (rf *Raft) transferToFollower(currentTerm int) {
 	//DPrintf("服务[%d]成为任期[%d]的follower",rf.me,currentTerm)
 	rf.mu.Lock()
 	if currentTerm < rf.currentTerm {
-		panic("transferToFollower error")
+		rf.mu.Unlock()
+		return
 	}
 	rf.role = FOLLOWER
 	if currentTerm > rf.currentTerm {
@@ -332,6 +333,9 @@ func (rf *Raft) sendHeartBeat(server int) {
 	rf.mu.Unlock()
 	reply := &AppendEntriesReply{}
 	ok := rf.peers[server].Call("Raft.AppendEntriesRPC", args, reply)
+	if ok == false {
+		return
+	}
 	// 不再是LEADER
 	if ok == true && reply.CurrentTerm > rf.currentTerm {
 		rf.transferToFollower(reply.CurrentTerm)
