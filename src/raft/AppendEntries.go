@@ -35,7 +35,9 @@ func (rf *Raft) AppendEntriesRPC(args *AppendEntriesArgs, reply *AppendEntriesRe
 		rf.transferToFollower(args.Term)
 	}
 	// 检查PrevLog是否存在
+	rf.mu.Lock()
 	exist, index, conflictTerm, conflictIndex := rf.logs.checkPrevLogExist(args.PrevLogTerm, args.PrevLogIndex)
+	rf.mu.Unlock()
 	reply.CurrentTerm = args.Term // 只有args.Term能保证一致，rf.currentTerm可能增大
 	reply.Success = exist
 	if exist == false {
