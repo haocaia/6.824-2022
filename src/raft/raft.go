@@ -15,8 +15,8 @@ const (
 	LEADER           = "leader"
 	FOLLOWER         = "follower"
 	CANDIDATE        = "candidate"
-	ElectionMinLimit = 400
-	ElectionWeight   = 150                                                    // 100 + rand(ElectionWeight)
+	ElectionMinLimit = 500
+	ElectionWeight   = 200                                                    // 100 + rand(ElectionWeight)
 	ElectionTimeout  = (ElectionWeight + ElectionMinLimit) * time.Millisecond // 1000Millsecond = 1秒, 超时的最低时限
 )
 
@@ -238,7 +238,7 @@ func (rf *Raft) transferToCandidate() int {
 
 func (rf *Raft) transferToLeader() {
 	rf.mu.Lock()
-	//DPrintf("服务[%d] 成为[%d]term的leader", rf.me, rf.currentTerm)
+	DPrintf("服务[%d] 成为[%d]term的leader", rf.me, rf.currentTerm)
 	rf.role = LEADER
 	rf.sendHeartBeatToAll()
 	for peer := range rf.peers {
@@ -279,7 +279,7 @@ func (rf *Raft) checkCommitIndex(currentTerm int) {
 		}
 
 		if nextCommitIndex > rf.logs.getLastLog().CurrentIndex || rf.logs.find(nextCommitIndex).CurrentTerm > currentTerm {
-			time.Sleep(time.Millisecond * time.Duration(rand.Intn(200)))
+			time.Sleep(time.Millisecond * time.Duration(rand.Intn(100)))
 			continue
 		}
 
@@ -300,11 +300,11 @@ func (rf *Raft) checkCommitIndex(currentTerm int) {
 				rf.commitIndex = max(rf.commitIndex, nextCommitIndex)
 				break
 			} else {
-				time.Sleep(200 * time.Millisecond)
+				time.Sleep(100 * time.Millisecond)
 			}
 		}
 
-		time.Sleep(200 * time.Millisecond)
+		//time.Sleep(100 * time.Millisecond)
 	}
 }
 
@@ -335,7 +335,7 @@ func (rf *Raft) sendHeartBeat(server int) {
 	}
 	rf.mu.Unlock()
 	reply := &AppendEntriesReply{}
-	DPrintf("发送心跳包")
+	DPrintf("leader[%d]给[%d]发送心跳包", rf.me, server)
 	ok := rf.peers[server].Call("Raft.AppendEntriesRPC", args, reply)
 	if ok == false || reply.CurrentTerm < rf.currentTerm {
 		return
@@ -459,25 +459,28 @@ func (rf *Raft) RequestVoteRPC(args *RequestVoteArgs, reply *RequestVoteReply) {
 // 调用本方法可以给server发一个RequestVoteRPC
 // server: 希望从server中获得票的选举人id
 // term: 选举的term, 如果term < rf.currentTerm,则应该放弃本轮选举
-func (rf *Raft) SendRequestVoteRPC(server int, term int) (bool, *RequestVoteReply) {
+func (rf *Raft) SendRequestVoteRPC(server int, currentTerm int) (bool, *RequestVoteReply) {
 	rf.mu.Lock()
 	args := &RequestVoteArgs{
-		CurrentTerm:    term,
+		CurrentTerm:    currentTerm,
 		CandidateIndex: rf.me,
 		LastLogIndex:   rf.logs.getLastLog().CurrentIndex,
 		LastLogTerm:    rf.logs.getLastLog().CurrentTerm,
 	}
 	rf.mu.Unlock()
 	reply := &RequestVoteReply{}
-	if rf.role != CANDIDATE {
+	if rf.role != CANDIDATE || rf.currentTerm > currentTerm {
 		reply.VotedMe = false
 		reply.CurrentTerm = rf.currentTerm
 		return false, reply
 	}
+	if rf.currentTerm < currentTerm {
+		panic("SendRequestVoteRPC term error")
+	}
 	DPrintf("服务[%d]发送选举", rf.me)
 	ok := rf.peers[server].Call("Raft.RequestVoteRPC", args, reply)
 
-	if rf.role != CANDIDATE {
+	if rf.role != CANDIDATE || rf.currentTerm > currentTerm {
 		reply.VotedMe = false
 		reply.CurrentTerm = max(reply.CurrentTerm, rf.currentTerm)
 		return false, reply
@@ -513,7 +516,7 @@ func (rf *Raft) tryCommit(currentTerm int, server int) {
 		//DPrintf("服务[%d]尝试给[%d]添加[%d]之后的日志的结果[%v], [%v]", rf.me, server, prevLog.CurrentIndex, ok, reply.Success)
 		if ok == false {
 			// RPC失败，睡眠就行
-			time.Sleep(200 * time.Millisecond)
+			time.Sleep(150 * time.Millisecond)
 		} else {
 			if reply.CurrentTerm < rf.currentTerm { //丢弃过期rpc
 				return
@@ -542,7 +545,7 @@ func (rf *Raft) tryCommit(currentTerm int, server int) {
 				conflictIndex := reply.ConflictIndex
 				rf.nextIndex[server] = rf.logs.findNextIndex(conflictTerm, conflictIndex)
 				rf.mu.Unlock()
-				time.Sleep(200 * time.Millisecond)
+				time.Sleep(150 * time.Millisecond)
 			} else {
 				panic("try commit error")
 			}
@@ -709,6 +712,7 @@ func (rf *Raft) ticker() {
 	time.Sleep(time.Duration(rand.Intn(100)))
 	for rf.killed() == false {
 		if rf.role == LEADER {
+			DPrintf("leader[%d] in term: [%d] ticker", rf.me, rf.currentTerm)
 			go rf.sendHeartBeatToAll()
 		}
 		// 超时选举
@@ -716,7 +720,7 @@ func (rf *Raft) ticker() {
 			currentTerm := rf.transferToCandidate()
 			go rf.startElection(currentTerm)
 		}
-		time.Sleep(time.Millisecond * time.Duration(rand.Intn(350)))
+		time.Sleep(time.Millisecond * time.Duration(rand.Intn(400)))
 	}
 }
 
