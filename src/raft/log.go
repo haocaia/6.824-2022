@@ -149,8 +149,13 @@ func (l *Log) checkPrevLogExist(currentTerm, currentIndex int) (bool, int, int, 
 	}
 	matchIndex := l.len() - 1
 	for matchIndex >= 0 &&
+		matchIndex < l.len() &&
 		l.get(matchIndex).CurrentIndex != currentIndex {
 		matchIndex -= 1
+	}
+
+	if matchIndex > l.len() {
+		return false, -1, -1, l.len()
 	}
 
 	if matchIndex != -1 && l.Entries[matchIndex].CurrentTerm != currentTerm {
