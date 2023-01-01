@@ -161,7 +161,7 @@ func (rf *Raft) resetElectionTimeOut() {
 }
 
 func (rf *Raft) startElection(currentTerm int) {
-	DPrintf("服务[%d]超时，正在发起第[%d]轮选举, 当前任期[%d]\n", rf.me, currentTerm, rf.currentTerm)
+	//DPrintf("服务[%d]超时，正在发起第[%d]轮选举, 当前任期[%d]\n", rf.me, currentTerm, rf.currentTerm)
 	if rf.currentTerm < currentTerm || rf.currentTerm <= 0 {
 		panic(errors.New("启动选举失败\n"))
 	}
@@ -372,17 +372,17 @@ func (rf *Raft) voteToServer(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// 更新指: 1. term 更大 2. 相等的term和更大的index
 	if args.LastLogTerm > latestLogTerm ||
 		(args.LastLogTerm == latestLogTerm && args.LastLogIndex >= latestLogIndex) {
+		rf.mu.Lock()
 		if rf.votedFor == nil {
 			rf.lastRPCTime = time.Now()
 			rf.votedFor = &args.CandidateIndex
 			reply.VotedMe = true
 			if rf.role == FOLLOWER {
-				rf.mu.Lock()
 				rf.role = CANDIDATE
-				rf.mu.Unlock()
 			}
 		}
-		//DPrintf("服务[%d] 在Term: %d 投票给 %d 成功", rf.me, args.CurrentTerm, args.CandidateIndex)
+		DPrintf("服务[%d] 在Term: [%d] 的竞选中投票给 [%d]", rf.me, args.CurrentTerm, args.CandidateIndex)
+		rf.mu.Unlock()
 	}
 	//DPrintf("服务[%d]在[%d]轮投票给[%d]结果[%v]",rf.me,args.CurrentTerm,args.CandidateIndex,reply.VotedMe)
 	return
@@ -500,7 +500,7 @@ func (rf *Raft) tryCommit(currentTerm int, server int) {
 		// 所有要发的日志
 		allLog := rf.logs.getFrom(nextCommitIndex)
 		args := &AppendEntriesArgs{
-			Term:         rf.currentTerm,
+			Term:         currentTerm,
 			LeaderId:     rf.me,
 			PrevLogIndex: prevLog.CurrentIndex,
 			PrevLogTerm:  prevLog.CurrentTerm,
@@ -511,7 +511,7 @@ func (rf *Raft) tryCommit(currentTerm int, server int) {
 		rf.mu.Unlock()
 
 		//DPrintf("leader[%d]尝试给[%d]发送[%d]之后的log:\n%s", rf.me, server, prevLog.CurrentIndex,allLog.String())
-		DPrintf("服务[%d]发送Commit Append RPC包", rf.me)
+		//DPrintf("服务[%d]发送Commit Append RPC包", rf.me)
 		ok := rf.peers[server].Call("Raft.AppendEntriesRPC", args, reply)
 		//DPrintf("服务[%d]尝试给[%d]添加[%d]之后的日志的结果[%v], [%v]", rf.me, server, prevLog.CurrentIndex, ok, reply.Success)
 		if ok == false {
@@ -523,14 +523,14 @@ func (rf *Raft) tryCommit(currentTerm int, server int) {
 			}
 
 			if reply.CurrentTerm > rf.currentTerm {
-				DPrintf("服务[%d]在commit时收到更大的term: %d", rf.me, reply.CurrentTerm)
+				//DPrintf("服务[%d]在commit时收到更大的term: %d", rf.me, reply.CurrentTerm)
 				rf.transferToFollower(reply.CurrentTerm)
 				return
 			} else if reply.Success == true {
 
 				if args.Entries.len() > 0 {
 					rf.mu.Lock()
-					DPrintf("服务[%d]成功复制日志[%d, %d]", server, args.Entries.getLastLog().CurrentTerm, args.Entries.getLastLog().CurrentIndex)
+					//DPrintf("服务[%d]成功复制日志[%d, %d]", server, args.Entries.getLastLog().CurrentTerm, args.Entries.getLastLog().CurrentIndex)
 					matchIndex := args.Entries.getLastLog().CurrentIndex
 					rf.matchIndex[server] = max(rf.matchIndex[server], matchIndex)
 					rf.nextIndex[server] = max(rf.nextIndex[server], rf.matchIndex[server]+1)
@@ -658,7 +658,7 @@ func (rf *Raft) listenCommit(currentTerm int) {
 			if server == rf.me {
 				continue
 			}
-			if rf.role != LEADER {
+			if rf.role != LEADER || rf.currentTerm != currentTerm {
 				return
 			}
 			// 检查server日志是不是和leader一样新
@@ -678,13 +678,14 @@ func (rf *Raft) listenStateMachine() {
 		if rf.commitIndex > rf.lastApplied {
 			rf.mu.Lock()
 			index := rf.lastApplied + 1
+			rf.lastApplied += 1
 			entry := rf.logs.find(index)
 			rf.mu.Unlock()
 			if entry.CurrentIndex <= 0 {
 				time.Sleep(100 * time.Millisecond)
 				continue
 			}
-			rf.mu.Lock()
+			//rf.mu.Lock()
 
 			msg := ApplyMsg{
 				CommandValid:  true,
@@ -696,12 +697,12 @@ func (rf *Raft) listenStateMachine() {
 				SnapshotIndex: 0,     //todo
 			}
 			rf.stateMachine <- msg
-			rf.lastApplied += 1
+
 			//DPrintf("服务[%d]将日志[%s]加入状态机,apply:%d, commitIndex: %d, logs:\n%s", rf.me, entry, rf.lastApplied, entry.CurrentIndex, rf.logs)
 			//DPrintf("服务[%d]将日志[%d, %d]加入状态机,apply:%d, commitIndex: %d", rf.me, entry.CurrentTerm, entry.CurrentIndex, rf.lastApplied, entry.CurrentIndex)
-			rf.mu.Unlock()
+			//rf.mu.Unlock()
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
@@ -712,7 +713,7 @@ func (rf *Raft) ticker() {
 	time.Sleep(time.Duration(rand.Intn(100)))
 	for rf.killed() == false {
 		if rf.role == LEADER {
-			DPrintf("leader[%d] in term: [%d] ticker", rf.me, rf.currentTerm)
+			//DPrintf("leader[%d] in term: [%d] ticker", rf.me, rf.currentTerm)
 			go rf.sendHeartBeatToAll()
 		}
 		// 超时选举
