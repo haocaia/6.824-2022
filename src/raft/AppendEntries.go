@@ -50,6 +50,7 @@ func (rf *Raft) AppendEntriesRPC(args *AppendEntriesArgs, reply *AppendEntriesRe
 	// !! 当且仅当follower的日志与append中 **存在** 的日志冲突时才截断，
 	if args.Entries.len() > 0 {
 		rf.logs.appendLog(index+1, args.Entries)
+		rf.persist()
 		//DPrintf("服务[%d]收到非心跳appendRPC, log:[%v], prevTerm: [%d], prevIndex=[%d], exist=[%v], index=[%d], 当前日志\n%s", rf.me, args.Entries, args.PrevLogTerm, args.PrevLogIndex, exist, index, rf.logs)
 		//DPrintf("服务[%d]收到非心跳AppendRPC,当前日志\n%s", rf.me, rf.logs.String())
 	}

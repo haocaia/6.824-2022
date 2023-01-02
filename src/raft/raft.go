@@ -1,7 +1,9 @@
 package raft
 
 import (
+	"6.824/src/labgob"
 	"6.824/src/labrpc"
+	"bytes"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -109,13 +111,17 @@ func (rf *Raft) GetState() (int, bool) {
 // see paper's Figure 2 for a description of what should be persistent.
 func (rf *Raft) persist() {
 	// Your code here (2C).
-	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	vote := -1
+	if rf.votedFor != nil {
+		vote = *rf.votedFor
+	}
+	e.Encode(vote)
+	e.Encode(rf.logs)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 // restore previously persisted state.
@@ -123,19 +129,24 @@ func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
 	}
-	// Your code here (2C).
-	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var currentTerm int
+	var vote int
+	var log Log
+	if d.Decode(&currentTerm) != nil ||
+		d.Decode(&vote) != nil ||
+		d.Decode(&log) != nil {
+		panic(any("decode error"))
+	} else {
+		rf.currentTerm = currentTerm
+		if vote == -1 {
+			rf.votedFor = nil
+		} else {
+			rf.votedFor = &vote
+		}
+		rf.logs = log
+	}
 }
 
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
@@ -232,13 +243,14 @@ func (rf *Raft) transferToCandidate() int {
 	rf.resetElectionTimeOut()
 	rf.role = CANDIDATE
 	currentTerm := rf.currentTerm
+	rf.persist()
 	rf.mu.Unlock()
 	return currentTerm
 }
 
 func (rf *Raft) transferToLeader() {
 	rf.mu.Lock()
-	DPrintf("服务[%d] 成为[%d]term的leader", rf.me, rf.currentTerm)
+	//DPrintf("服务[%d] 成为[%d]term的leader", rf.me, rf.currentTerm)
 	rf.role = LEADER
 	rf.sendHeartBeatToAll()
 	for peer := range rf.peers {
@@ -268,6 +280,7 @@ func (rf *Raft) transferToFollower(currentTerm int) {
 		rf.votedFor = nil
 	}
 	rf.currentTerm = currentTerm
+	rf.persist()
 	rf.mu.Unlock()
 }
 
@@ -335,7 +348,7 @@ func (rf *Raft) sendHeartBeat(server int) {
 	}
 	rf.mu.Unlock()
 	reply := &AppendEntriesReply{}
-	DPrintf("leader[%d]给[%d]发送心跳包", rf.me, server)
+	//DPrintf("leader[%d]给[%d]发送心跳包", rf.me, server)
 	ok := rf.peers[server].Call("Raft.AppendEntriesRPC", args, reply)
 	if ok == false || reply.CurrentTerm < rf.currentTerm {
 		return
@@ -380,8 +393,9 @@ func (rf *Raft) voteToServer(args *RequestVoteArgs, reply *RequestVoteReply) {
 			if rf.role == FOLLOWER {
 				rf.role = CANDIDATE
 			}
+			rf.persist()
 		}
-		DPrintf("服务[%d] 在Term: [%d] 的竞选中投票给 [%d]", rf.me, args.CurrentTerm, args.CandidateIndex)
+		//DPrintf("服务[%d] 在Term: [%d] 的竞选中投票给 [%d]", rf.me, args.CurrentTerm, args.CandidateIndex)
 		rf.mu.Unlock()
 	}
 	//DPrintf("服务[%d]在[%d]轮投票给[%d]结果[%v]",rf.me,args.CurrentTerm,args.CandidateIndex,reply.VotedMe)
@@ -477,7 +491,7 @@ func (rf *Raft) SendRequestVoteRPC(server int, currentTerm int) (bool, *RequestV
 	if rf.currentTerm < currentTerm {
 		panic("SendRequestVoteRPC term error")
 	}
-	DPrintf("服务[%d]发送选举", rf.me)
+	//DPrintf("服务[%d]发送选举", rf.me)
 	ok := rf.peers[server].Call("Raft.RequestVoteRPC", args, reply)
 
 	if rf.role != CANDIDATE || rf.currentTerm > currentTerm {
@@ -620,6 +634,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}}}
 	// !!必须加锁，保证index每次+1
 	rf.logs.appendLastLog(entryToAppend)
+	rf.persist()
 
 	index = entryToAppend.getFirstLog().CurrentIndex
 	term = entryToAppend.getFirstLog().CurrentTerm
@@ -755,7 +770,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.nextIndex = make([]int, len(peers))
 	rf.matchIndex = make([]int, len(peers))
 	// initialize from state persisted before a crash
+	rf.mu.Lock()
 	rf.readPersist(persister.ReadRaftState())
+	rf.mu.Unlock()
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
