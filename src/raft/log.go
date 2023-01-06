@@ -48,32 +48,36 @@ func (l *Log) len() int {
 	return len(l.Entries)
 }
 
-// 查找currentIndex，并返回这个下标
+// 查找currentIndex日志的下标
+// currentIndex应该单增，因此就在currentIndex - lastIncludeIndex这个下标
+// 下标范围[lastIncludeIndex+1, lastIncludeIndex+len-1]
+// 若存在，返回对应的下标。若不存在则返回-1
 func (l *Log) indexAt(currentIndex int) int {
-	index := l.len() - 1
-	// 找到第一个 index = currentIndex的位置, 找不到返回-1
-	for ; index >= 0 &&
-		l.Entries[index].CurrentIndex != currentIndex; index -= 1 {
-		//do nothing
+	index := currentIndex - l.getLastIncludedIndex()
+	if index < 0 || index >= l.len() {
+		return -1
+	}
+	if index == 0 && l.Entries[index].CurrentIndex != currentIndex {
+		return -1
 	}
 	return index
 }
 
 // 查找currentIndex，并返回这个entry
+// 只有当lastLogIndex >= currentIndex >= lastIncludedIndex才会返回。否则返回-1,-1,cmd
 func (l *Log) find(currentIndex int) Entry {
-	index := l.len() - 1
-	for ; index >= 0 &&
-		l.Entries[index].CurrentIndex != currentIndex; index -= 1 {
-	}
+	index := l.indexAt(currentIndex)
 	if index < 0 {
-		return createEntry(-1, -1, "error")
+		return createEntry(-1, -1, "currentIndex不存在")
 	}
 	oldEntry := l.Entries[index]
 	newEntry := createEntry(oldEntry.CurrentTerm, oldEntry.CurrentIndex, oldEntry.Command)
 	return newEntry
 }
 
-// 返回下标对应的log，如果下标是-1，返回zeroEntry
+// 返回下标对应的log
+// index: 日志对应下标，[1,len-1]
+// 如果下标是-1，返回zeroEntry
 func (l *Log) get(index int) Entry {
 	if index < 0 || index >= l.len() {
 		panic(errors.New(fmt.Sprintf("error log index, total len: %d, get index: %d", l.len(), index)))
@@ -83,121 +87,114 @@ func (l *Log) get(index int) Entry {
 	return newEntry
 }
 
+// 返回currentIndex(包含)及之后的日志。
+// 若不存在currentIndex，返回空日志
 func (l *Log) getFrom(currentIndex int) Log {
-	if currentIndex < 1 {
-		panic(fmt.Sprintf("getFrom index out of range: %d, max currentIndex: %d", currentIndex, l.getLastLog().CurrentIndex))
+	index := l.indexAt(currentIndex)
+	if index < 0 {
+		return createLog(-1, -1, fmt.Sprintf("getFrom找不到日志%d", currentIndex))
 	}
-	if currentIndex > l.getLastLog().CurrentIndex {
-		return Log{Entries: []Entry{}}
-	}
-	i := l.len() - 1
-	for ; i >= 0 && l.Entries[i].CurrentIndex > currentIndex; i -= 1 {
-	}
-	if l.Entries[i].CurrentIndex != currentIndex {
-		panic("getFrom not fine currentIndex")
-	}
-	log := Log{Entries: append([]Entry{}, l.Entries[i:]...)}
+
+	log := Log{Entries: append([]Entry{}, l.Entries[index:]...)}
 	return log
 }
 
+// 返回最后一个日志
+// 若日志为空则报错
 func (l *Log) getLastLog() Entry {
-	if len(l.Entries) <= 0 {
-		panic("log len == 0")
+	if l.len() == 0 {
+		panic("getLastLog len == 0")
 	}
 
 	oldEntry := l.Entries[l.len()-1]
 	newEntry := createEntry(oldEntry.CurrentTerm, oldEntry.CurrentIndex, oldEntry.Command)
 	return newEntry
 }
+
+// 返回最新一个日志
 func (l *Log) getFirstLog() Entry {
-	if len(l.Entries) == 0 {
+	if len(l.Entries) <= 1 {
 		panic("log len <= 1")
 	}
-	oldEntry := l.Entries[0]
+	oldEntry := l.Entries[1]
 	newEntry := createEntry(oldEntry.CurrentTerm, oldEntry.CurrentIndex, oldEntry.Command)
 	return newEntry
 }
 
-// index是要插入的位置，保留 0-index-1
+// index是要插入的位置，插入位置>1
 func (l *Log) appendLog(index int, entries Log) {
-	l.Entries = append(l.Entries[:index], entries.Entries...)
-}
-
-func (l *Log) appendEntries(index int, entries []Entry) {
-	l.Entries = append(l.Entries[:index], entries...)
-}
-
-func (l *Log) appendLastLog(entries Log) {
-	if entries.getFirstLog().CurrentIndex != l.getLastLog().CurrentIndex+1 {
-		DPrintf("leader log不是单调增加1")
-		return
+	if index <= 0 {
+		panic("appendLog index <= 0")
 	}
-	l.Entries = append(l.Entries[:], entries.Entries...)
+	l.Entries = append(l.Entries[:index], entries.Entries[1:]...)
+}
+
+func (l *Log) appendLastLog(term, index int, command interface{}) {
+	lastLogIndex := l.Entries[l.len()-1].CurrentIndex
+	if lastLogIndex+1 != index {
+		panic("appendLastLog: index != lastIndex + 1")
+	}
+	l.Entries = append(l.Entries, createEntry(term, index, command))
 	return
 }
 
-func (l *Log) appendLastEntries(entries []Entry) {
-	l.Entries = append(l.Entries[:], entries...)
-}
-
-// 是否存在， 数组下标， currentTerm, currentIndex
-// 如果不存在匹配term和index的日志， 返回false， 如果index > len(log), 日志index返回len(log), 否则返回Zero entry
+// 检查Leader的PrevLog在server日志中是否存在
+// 1. prevLog超过server日志范围，返回 false, -1, len(log)
+// 2. 存在prevLogIndex但是Term不匹配，conflictTerm = log[prevLogIndex].Term，然后找到Term==conflictTerm的第一个日志
 // 如果存在，还会返回在数组中的下标和对应的term和日志index
-func (l *Log) checkPrevLogExist(currentTerm, currentIndex int) (bool, int, int, int) {
-	if l.getLastLog().CurrentIndex < currentIndex {
-		return false, -1, -1, l.len()
+func (l *Log) checkPrevLogExist(currentTerm, currentIndex int) (bool, int, int) {
+	index := l.indexAt(currentIndex)
+	if index < 0 {
+		return false, -1, l.getLastLog().CurrentIndex
 	}
-	matchIndex := l.len() - 1
-	for matchIndex >= 0 &&
-		matchIndex < l.len() &&
-		l.get(matchIndex).CurrentIndex != currentIndex {
-		matchIndex -= 1
-	}
-
-	if matchIndex > l.len() {
-		return false, -1, -1, l.len()
-	}
-
-	if matchIndex != -1 && l.Entries[matchIndex].CurrentTerm != currentTerm {
-		conflictTerm := l.Entries[matchIndex].CurrentTerm
-		conflictIndex := l.Entries[matchIndex].CurrentIndex
-
-		i := matchIndex
-		for i >= 0 {
-			if l.Entries[i].CurrentTerm == conflictTerm {
-				conflictIndex = l.Entries[i].CurrentIndex
-			}
-			i -= 1
+	oldLog := make([]Entry, l.len())
+	copy(oldLog, l.Entries)
+	if oldLog[index].CurrentTerm != currentTerm {
+		conflictTerm := oldLog[index].CurrentTerm
+		firstIndex := index
+		for firstIndex-1 > 0 && oldLog[firstIndex-1].CurrentTerm == conflictTerm {
+			firstIndex -= 1
 		}
-		return false, i, conflictTerm, conflictIndex
+		conflictIndex := oldLog[firstIndex].CurrentIndex
+		return false, conflictTerm, conflictIndex
 	}
 
-	// 不存在term匹配的记录，返回false
-	if matchIndex < 0 {
-		//DPrintf("不存在term匹配的记录， prevLogIndex[%d], prevLogTerm:[%d]", currentIndex, currentTerm)
-		panic("check prev log error")
-		return false, -1, -1, l.len()
-	}
-
-	return true, matchIndex, l.Entries[matchIndex].CurrentTerm, l.Entries[matchIndex].CurrentIndex
+	return true, currentTerm, currentIndex
 }
 
 // 找到term==conflictTerm的最后一条日志， 返回下一条日志对应index
 // 如果不存在，返回conflictIndex
 func (l *Log) findNextIndex(conflictTerm int, conflictIndex int) int {
 	// 这个是数组下标，不是log index, 需要做一次转换
-	matchIndex := l.len() - 1
+	oldLog := make([]Entry, l.len())
+	copy(oldLog, l.Entries)
+	matchIndex := len(oldLog) - 1
 	for matchIndex >= 0 &&
-		l.Entries[matchIndex].CurrentTerm > conflictTerm {
+		oldLog[matchIndex].CurrentTerm > conflictTerm {
 		matchIndex -= 1
 	}
 
 	// 不存在conflictTerm
-	if matchIndex == -1 || l.Entries[matchIndex].CurrentTerm != conflictTerm {
+	if matchIndex == -1 || oldLog[matchIndex].CurrentTerm != conflictTerm {
 		return conflictIndex
 	}
 
-	return l.Entries[matchIndex].CurrentIndex + 1
+	return oldLog[matchIndex].CurrentIndex + 1
+}
+
+func (l *Log) getLastIncludedIndex() int {
+	return l.Entries[0].CurrentIndex
+}
+
+func (l *Log) getLastIncludedTerm() int {
+	return l.Entries[0].CurrentTerm
+}
+
+func (l *Log) empty() bool {
+	if l.len() == 0 {
+		panic("empty error, log len == 0")
+	}
+	return l.len() <= 1
 }
 
 func (e Entry) String() string {
