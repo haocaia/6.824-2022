@@ -35,7 +35,6 @@ func (rf *Raft) AppendEntriesRPC(args *AppendEntriesArgs, reply *AppendEntriesRe
 		rf.transferToFollower(args.Term)
 	}
 
-	rf.lastRPCTime = time.Now()
 	// 检查PrevLog是否存在
 	//rf.mu.Lock()
 	exist, conflictTerm, conflictIndex := rf.logs.checkPrevLogExist(args.PrevLogTerm, args.PrevLogIndex)
@@ -63,7 +62,7 @@ func (rf *Raft) AppendEntriesRPC(args *AppendEntriesArgs, reply *AppendEntriesRe
 		if index < 0 {
 			panic("prevLog dont exist, but checkPrevLogExist is exist")
 		}
-		DPrintf("服务[%d]将最新日志[%d]加入自己的日志, 来自leader[%d]", rf.me, args.Entries.getLastLog().CurrentIndex, args.LeaderId)
+		//DPrintf("服务[%d]将最新日志[%d]加入自己的日志, 来自leader[%d]", rf.me, args.Entries.getLastLog().CurrentIndex, args.LeaderId)
 		rf.logs.appendLog(index+1, args.Entries)
 		rf.persist()
 		//DPrintf("服务[%d]收到非心跳appendRPC, log:[%v], prevTerm: [%d], prevIndex=[%d], exist=[%v], index=[%d], 当前日志\n%s", rf.me, args.Entries, args.PrevLogTerm, args.PrevLogIndex, exist, index, rf.logs)

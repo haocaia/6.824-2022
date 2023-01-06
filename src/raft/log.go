@@ -94,6 +94,9 @@ func (l *Log) getFrom(currentIndex int) Log {
 	if index < 0 {
 		return createLog(-1, -1, fmt.Sprintf("getFrom找不到日志%d", currentIndex))
 	}
+	if index == 0 {
+		index += 1
+	}
 
 	log := Log{Entries: append([]Entry{}, l.Entries[index:]...)}
 	return log
@@ -147,8 +150,9 @@ func (l *Log) checkPrevLogExist(currentTerm, currentIndex int) (bool, int, int) 
 	if index < 0 {
 		return false, -1, l.getLastLog().CurrentIndex
 	}
-	oldLog := make([]Entry, l.len())
-	copy(oldLog, l.Entries)
+	//oldLog := make([]Entry, l.len())
+	//copy(oldLog, l.Entries)
+	oldLog := l.Entries
 	if oldLog[index].CurrentTerm != currentTerm {
 		conflictTerm := oldLog[index].CurrentTerm
 		firstIndex := index
@@ -166,8 +170,9 @@ func (l *Log) checkPrevLogExist(currentTerm, currentIndex int) (bool, int, int) 
 // 如果不存在，返回conflictIndex
 func (l *Log) findNextIndex(conflictTerm int, conflictIndex int) int {
 	// 这个是数组下标，不是log index, 需要做一次转换
-	oldLog := make([]Entry, l.len())
-	copy(oldLog, l.Entries)
+	//oldLog := make([]Entry, l.len())
+	//copy(oldLog, l.Entries)
+	oldLog := l.Entries
 	matchIndex := len(oldLog) - 1
 	for matchIndex >= 0 &&
 		oldLog[matchIndex].CurrentTerm > conflictTerm {

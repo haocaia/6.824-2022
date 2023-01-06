@@ -172,7 +172,7 @@ func (rf *Raft) resetElectionTimeOut() {
 }
 
 func (rf *Raft) startElection(currentTerm int) {
-	DPrintf("服务[%d]超时，正在发起第[%d]轮选举, 当前任期[%d]\n", rf.me, currentTerm, rf.currentTerm)
+	//DPrintf("服务[%d]超时，正在发起第[%d]轮选举, 当前任期[%d]\n", rf.me, currentTerm, rf.currentTerm)
 	if rf.currentTerm < currentTerm || rf.currentTerm <= 0 {
 		panic(errors.New("启动选举失败\n"))
 	}
@@ -405,14 +405,14 @@ func (rf *Raft) voteToServer(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Unlock()
 	// 只有当candidate的日志更新时才会投票
 	// 更新指: 1. term 更大 2. 相等的term和更大的index
-	DPrintf("投票信息: Leader最新日志:[%d, %d], Leader term: %d,我的最新日志:[%d, %d], 我的term和投票情况: [%d, %v]", args.LastLogTerm, args.LastLogIndex, args.CurrentTerm, rf.logs.getLastLog().CurrentTerm, rf.logs.getLastLog().CurrentIndex, rf.currentTerm, rf.votedFor)
+	DPrintf("投票信息: Leader[%d]最新日志:[%d, %d], Leader term: %d,我的最新日志:[%d, %d], 服务[%d]的term和投票情况: [%d, %v]", args.CandidateIndex, args.LastLogTerm, args.LastLogIndex, args.CurrentTerm, rf.logs.getLastLog().CurrentTerm, rf.logs.getLastLog().CurrentIndex, rf.me, rf.currentTerm, rf.votedFor)
 	if args.LastLogTerm > latestLogTerm ||
 		(args.LastLogTerm == latestLogTerm && args.LastLogIndex >= latestLogIndex) {
 		rf.mu.Lock()
 		if rf.votedFor == nil {
 			rf.lastRPCTime = time.Now()
 			rf.votedFor = &args.CandidateIndex
-			DPrintf("服务[%d]在term[%d]的选举中投票给[%d]", rf.me, args.CurrentTerm, args.CandidateIndex)
+			//DPrintf("服务[%d]在term[%d]的选举中投票给[%d]", rf.me, args.CurrentTerm, args.CandidateIndex)
 			reply.VotedMe = true
 			if rf.role == FOLLOWER {
 				rf.role = CANDIDATE
@@ -426,7 +426,7 @@ func (rf *Raft) voteToServer(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.CurrentTerm != rf.currentTerm {
 		reply.VotedMe = false
 	}
-	DPrintf("服务[%d]在[%d]轮投票给[%d]结果[%v]", rf.me, args.CurrentTerm, args.CandidateIndex, reply.VotedMe)
+	//DPrintf("服务[%d]在[%d]轮投票给[%d]结果[%v]", rf.me, args.CurrentTerm, args.CandidateIndex, reply.VotedMe)
 	return
 }
 
@@ -547,7 +547,7 @@ func (rf *Raft) tryCommit(currentTerm int, server int) {
 		// TODO 发送snapshot
 		//rf.mu.Unlock()
 		//return
-		prevLog = rf.logs.get(0)
+		prevLog = rf.logs.Entries[0]
 	}
 	allLog := rf.logs.getFrom(nextCommitIndex)
 	allLog.Entries = append([]Entry{createEntry(rf.logs.getLastIncludedTerm(), rf.logs.getLastIncludedIndex(), "snapshot")}, allLog.Entries[:]...)
@@ -572,7 +572,7 @@ func (rf *Raft) tryCommit(currentTerm int, server int) {
 		}
 		return
 	}
-	DPrintf("服务[%d]给[%d]发送[%d]的结果[%v], [%v]", rf.me, server, prevLog.CurrentIndex, ok, reply.Success)
+	//DPrintf("服务[%d]给[%d]发送[%d]的结果[%v], [%v]", rf.me, server, prevLog.CurrentIndex, ok, reply.Success)
 	if reply.CurrentTerm > rf.currentTerm {
 		//DPrintf("服务[%d]在commit时收到更大的term: %d", rf.me, reply.CurrentTerm)
 		rf.transferToFollower(reply.CurrentTerm)
@@ -629,7 +629,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		isLeader = false
 		return index, term, isLeader
 	}
-	DPrintf("Term[%d]leader[%d]收到command[%v],开始共识", rf.currentTerm, rf.me, command)
+	//DPrintf("Term[%d]leader[%d]收到command[%v],开始共识", rf.currentTerm, rf.me, command)
 
 	//1. 加锁保证index每次+1
 	//DPrintf("LEADER[%d]等锁", rf.me)
@@ -722,8 +722,10 @@ func (rf *Raft) listenStateMachine() {
 			//DPrintf("服务[%d]将日志[%s]加入状态机,apply:%d, commitIndex: %d, logs:\n%s", rf.me, entry, rf.lastApplied, entry.CurrentIndex, rf.logs)
 			//DPrintf("服务[%d]将日志[%d, %d]加入状态机,apply:%d, commitIndex: %d", rf.me, entry.CurrentTerm, entry.CurrentIndex, rf.lastApplied, entry.CurrentIndex)
 			//rf.mu.Unlock()
+		} else {
+			time.Sleep(50 * time.Millisecond)
 		}
-		time.Sleep(50 * time.Millisecond)
+
 	}
 }
 
@@ -742,7 +744,8 @@ func (rf *Raft) ticker() {
 			//DPrintf("服务[%d]开始选举，当前时间%v", rf.me, rf.lastRPCTime.String())
 			currentTerm := rf.transferToCandidate()
 			go rf.startElection(currentTerm)
-			time.Sleep(time.Millisecond * time.Duration(50)) // 额外休眠，防止抢别人时间
+			//time.Sleep(rf.electionTime - time.Duration(300)*time.Millisecond) // 额外休眠，防止抢别人时间
+			time.Sleep(150 * time.Millisecond)
 			rf.lastRPCTime = time.Now()
 		}
 		time.Sleep(time.Millisecond * time.Duration(rand.Intn(300)))
