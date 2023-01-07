@@ -17,8 +17,8 @@ const (
 	LEADER           = "leader"
 	FOLLOWER         = "follower"
 	CANDIDATE        = "candidate"
-	ElectionMinLimit = 400
-	ElectionWeight   = 150                                                    // 100 + rand(ElectionWeight)
+	ElectionMinLimit = 150
+	ElectionWeight   = 100                                                    // 100 + rand(ElectionWeight)
 	ElectionTimeout  = (ElectionWeight + ElectionMinLimit) * time.Millisecond // 1000Millsecond = 1秒, 超时的最低时限
 )
 
@@ -51,7 +51,7 @@ type Raft struct {
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 
-	// Your data here (2A, 2B, 2C).
+	// Your Data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
@@ -124,6 +124,21 @@ func (rf *Raft) persist() {
 	rf.persister.SaveRaftState(data)
 }
 
+func (rf *Raft) persistData() []byte {
+	// Your code here (2C).
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	vote := -1
+	if rf.votedFor != nil {
+		vote = *rf.votedFor
+	}
+	e.Encode(vote)
+	e.Encode(rf.logs)
+	data := w.Bytes()
+	return data
+}
+
 // restore previously persisted state.
 func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
@@ -147,6 +162,9 @@ func (rf *Raft) readPersist(data []byte) {
 		}
 		rf.logs = log
 	}
+	//DPrintf("服务[%d]重启，最新日志\n%s", rf.me, rf.logs)
+	rf.commitIndex = max(rf.commitIndex, rf.logs.getLastIncludedIndex())
+	rf.lastApplied = max(rf.lastApplied, rf.logs.getLastIncludedIndex())
 }
 
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
@@ -164,6 +182,36 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
+	//DPrintf("服务[%d]收到快照请求[%d]", rf.me, index)
+	if snapshot == nil || len(snapshot) < 1 {
+		return
+	}
+	if rf.logs.getLastIncludedIndex() >= index {
+		return
+	}
+	if rf.commitIndex < index {
+		return
+	}
+
+	lastSnapshotLog := rf.logs.find(index)
+	if lastSnapshotLog.CurrentTerm <= 0 {
+		//rf.mu.Unlock()
+		return
+	}
+
+	ok := rf.logs.updateSnapshot(lastSnapshotLog.CurrentTerm, lastSnapshotLog.CurrentIndex)
+	if ok == false {
+		//DPrintf("Snapshot false")
+		//rf.mu.Unlock()
+		return
+	}
+	//DPrintf("服务[%d]快照[%d]", rf.me, index)
+
+	rf.commitIndex = max(rf.commitIndex, index)
+	rf.lastApplied = max(rf.lastApplied, index)
+	rf.mu.Lock()
+	rf.persister.SaveStateAndSnapshot(rf.persistData(), snapshot)
+	rf.mu.Unlock()
 
 }
 
@@ -218,7 +266,7 @@ func (rf *Raft) startElection(currentTerm int) {
 		numVote <= numPeers/2 &&
 		rf.currentTerm == currentTerm &&
 		time.Now().Before(rf.lastRPCTime.Add(rf.electionTime)) {
-		time.Sleep(time.Duration(rand.Intn(50)) * time.Millisecond)
+		time.Sleep(time.Duration(rand.Intn(25)) * time.Millisecond)
 	}
 
 	if rf.currentTerm > currentTerm || rf.role != CANDIDATE || time.Now().After(rf.lastRPCTime.Add(rf.electionTime)) || numVote <= numPeers/2 {
@@ -235,19 +283,22 @@ func (rf *Raft) transferToCandidate() int {
 	rf.mu.Lock()
 	rf.currentTerm = rf.currentTerm + 1
 	rf.votedFor = &rf.me
-	rf.lastRPCTime = time.Now()
-	rf.resetElectionTimeOut()
 	rf.role = CANDIDATE
 	currentTerm := rf.currentTerm
 	rf.persist()
 	rf.mu.Unlock()
+	rf.lastRPCTime = time.Now()
+	rf.resetElectionTimeOut()
+
 	return currentTerm
 }
 
 func (rf *Raft) transferToLeader() {
 	rf.mu.Lock()
-	DPrintf("服务[%d] 成为[%d]term的leader", rf.me, rf.currentTerm)
+	//DPrintf("服务[%d] 成为[%d]term的leader", rf.me, rf.currentTerm)
 	rf.role = LEADER
+	currentTerm := rf.currentTerm
+	rf.mu.Unlock()
 	go rf.sendHeartBeatToAll()
 	for peer := range rf.peers {
 		if peer == rf.me {
@@ -257,8 +308,7 @@ func (rf *Raft) transferToLeader() {
 		rf.nextIndex[peer] = rf.logs.getLastLog().CurrentIndex + 1
 		rf.matchIndex[peer] = 0
 	}
-	currentTerm := rf.currentTerm
-	rf.mu.Unlock()
+
 	//rf.persist()
 	go rf.listenCommit(currentTerm)
 	go rf.checkCommitIndex(currentTerm)
@@ -267,20 +317,19 @@ func (rf *Raft) transferToLeader() {
 func (rf *Raft) transferToFollower(currentTerm int) {
 	//DPrintf("服务[%d]成为任期[%d]的follower", rf.me, currentTerm)
 	rf.mu.Lock()
-	rf.lastRPCTime = time.Now()
-	rf.resetElectionTimeOut()
+
 	if currentTerm <= rf.currentTerm {
 		rf.mu.Unlock()
 		return
 	}
 	rf.role = FOLLOWER
 	rf.votedFor = nil
-	//if currentTerm > rf.currentTerm {
-	//	rf.votedFor = nil
-	//}
 	rf.currentTerm = currentTerm
 	rf.persist()
 	rf.mu.Unlock()
+	rf.lastRPCTime = time.Now()
+	rf.resetElectionTimeOut()
+
 }
 
 func (rf *Raft) checkCommitIndex(currentTerm int) {
@@ -289,7 +338,7 @@ func (rf *Raft) checkCommitIndex(currentTerm int) {
 		nextCommitIndex := rf.commitIndex + 1
 		//DPrintf("LEADER[%d]检查nextCommitIndex[%d]的位置[%d]", rf.me, nextCommitIndex, rf.logs.indexAt(nextCommitIndex))
 		if rf.logs.indexAt(nextCommitIndex) < 0 {
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(25 * time.Millisecond)
 			continue
 		}
 		// 1. Term<=0: nextCommitIndex不存在
@@ -302,7 +351,7 @@ func (rf *Raft) checkCommitIndex(currentTerm int) {
 		//DPrintf("LEADER[%d]检查完nextCommitIndex[%d], 位置[%d]", rf.me, nextCommitIndex, rf.logs.indexAt(nextCommitIndex))
 		if rf.role != LEADER || rf.currentTerm != currentTerm ||
 			rf.logs.indexAt(nextCommitIndex) < 0 {
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(25 * time.Millisecond)
 			continue
 		}
 
@@ -325,15 +374,15 @@ func (rf *Raft) checkCommitIndex(currentTerm int) {
 			}
 			//DPrintf("日志:[%d] 已经被%d个服务复制", nextCommitIndex, num)
 			if rf.role == LEADER && currentTerm == rf.currentTerm && num > totalNum/2 {
-				DPrintf("leader[%d %d]更新commitIndex:[%d] -> [%d], 已经复制的节点:%v", rf.currentTerm, rf.me, rf.commitIndex, max(rf.commitIndex, nextCommitIndex), voted)
+				//DPrintf("leader[%d %d]更新commitIndex:[%d] -> [%d], 已经复制的节点:%v", rf.currentTerm, rf.me, rf.commitIndex, max(rf.commitIndex, nextCommitIndex), voted)
 				rf.commitIndex = max(rf.commitIndex, nextCommitIndex)
 				break
 			} else {
-				time.Sleep(100 * time.Millisecond)
+				time.Sleep(25 * time.Millisecond)
 			}
 		}
 
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(25 * time.Millisecond)
 	}
 }
 
@@ -376,12 +425,12 @@ func (rf *Raft) sendHeartBeat(server int, currentTerm int) {
 	}
 
 	if reply.Success == true {
-		rf.mu.Lock()
+		//rf.mu.Lock()
 		if rf.currentTerm == currentTerm && rf.role == LEADER {
 			rf.matchIndex[server] = max(rf.matchIndex[server], args.PrevLogIndex)
 			rf.nextIndex[server] = max(rf.nextIndex[server], rf.matchIndex[server]+1)
 		}
-		rf.mu.Unlock()
+		//rf.mu.Unlock()
 	}
 }
 
@@ -396,16 +445,16 @@ func (rf *Raft) voteToServer(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	// If votedFor is null or candidateId,
 	// and candidate’s log is at least as up-to-date as receiver’s log, grant vote
-	rf.mu.Lock()
+	//rf.mu.Lock()
 	reply.VotedMe = false
 	reply.CurrentTerm = args.CurrentTerm
 
 	latestLogTerm := rf.logs.getLastLog().CurrentTerm
 	latestLogIndex := rf.logs.getLastLog().CurrentIndex
-	rf.mu.Unlock()
+	//rf.mu.Unlock()
 	// 只有当candidate的日志更新时才会投票
 	// 更新指: 1. term 更大 2. 相等的term和更大的index
-	DPrintf("投票信息: Leader[%d]最新日志:[%d, %d], Leader term: %d,我的最新日志:[%d, %d], 服务[%d]的term和投票情况: [%d, %v]", args.CandidateIndex, args.LastLogTerm, args.LastLogIndex, args.CurrentTerm, rf.logs.getLastLog().CurrentTerm, rf.logs.getLastLog().CurrentIndex, rf.me, rf.currentTerm, rf.votedFor)
+	//DPrintf("投票信息: Leader[%d]最新日志:[%d, %d], Leader term: %d,我的最新日志:[%d, %d], 服务[%d]的term和投票情况: [%d, %v]", args.CandidateIndex, args.LastLogTerm, args.LastLogIndex, args.CurrentTerm, rf.logs.getLastLog().CurrentTerm, rf.logs.getLastLog().CurrentIndex, rf.me, rf.currentTerm, rf.votedFor)
 	if args.LastLogTerm > latestLogTerm ||
 		(args.LastLogTerm == latestLogTerm && args.LastLogIndex >= latestLogIndex) {
 		rf.mu.Lock()
@@ -433,7 +482,7 @@ func (rf *Raft) voteToServer(args *RequestVoteArgs, reply *RequestVoteReply) {
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 type RequestVoteArgs struct {
-	// Your data here (2A, 2B).
+	// Your Data here (2A, 2B).
 	// current Term: 候选人term assert CurrentTerm >= rf.CurrentTerm
 	// CandidateIndex: 候选人id
 	CurrentTerm    int
@@ -445,7 +494,7 @@ type RequestVoteArgs struct {
 // example RequestVote RPC reply structure.
 // field names must start with capital letters!
 type RequestVoteReply struct {
-	// Your data here (2A).
+	// Your Data here (2A).
 	// CurrentTerm: 对方的term，万一对方更新了，我可以更新
 	// VotedMe: 是否投给我了
 	CurrentTerm int
@@ -502,14 +551,14 @@ func (rf *Raft) RequestVoteRPC(args *RequestVoteArgs, reply *RequestVoteReply) {
 // server: 希望从server中获得票的选举人id
 // term: 选举的term, 如果term < rf.currentTerm,则应该放弃本轮选举
 func (rf *Raft) SendRequestVoteRPC(server int, currentTerm int) (bool, *RequestVoteReply) {
-	rf.mu.Lock()
+	//rf.mu.Lock()
 	args := &RequestVoteArgs{
 		CurrentTerm:    currentTerm,
 		CandidateIndex: rf.me,
 		LastLogIndex:   rf.logs.getLastLog().CurrentIndex,
 		LastLogTerm:    rf.logs.getLastLog().CurrentTerm,
 	}
-	rf.mu.Unlock()
+	//rf.mu.Unlock()
 	reply := &RequestVoteReply{}
 	if rf.role != CANDIDATE || rf.currentTerm > currentTerm {
 		reply.VotedMe = false
@@ -532,12 +581,12 @@ func (rf *Raft) SendRequestVoteRPC(server int, currentTerm int) (bool, *RequestV
 
 func (rf *Raft) tryCommit(currentTerm int, server int) {
 	// 只表示循环是否结束，不代表commit成功
-	//DPrintf("tryCommit[%d]", server)
-	rf.mu.Lock()
+	//DPrintf("leader[%d] tryCommit[%d], nextIndex:[%d]", rf.me, server, rf.nextIndex[server])
+	//rf.mu.Lock()
 	nextCommitIndex := rf.nextIndex[server]
 	if nextCommitIndex > rf.logs.getLastLog().CurrentIndex {
 		//DPrintf("服务[%d]的nextCommitIndex[%d], leader最大日志:%d", server, nextCommitIndex, rf.logs.getLastLog().CurrentIndex)
-		rf.mu.Unlock()
+		//rf.mu.Unlock()
 		return
 	}
 	//DPrintf("leader=[%d], server=[%d]的nextCommitIndex:[%d]", rf.me, server, rf.nextIndex[server])
@@ -545,9 +594,17 @@ func (rf *Raft) tryCommit(currentTerm int, server int) {
 	// 不存在,1:已经被快照
 	if prevLog.CurrentTerm < 0 {
 		// TODO 发送snapshot
-		//rf.mu.Unlock()
-		//return
+		//DPrintf("tryCommit: leader[%d]查找prevIndex[%d]失败:[%d %d %v]", rf.me, nextCommitIndex-1, prevLog.CurrentTerm, prevLog.CurrentIndex, prevLog.Command)
+		if rf.persister.ReadSnapshot() != nil {
+			//rf.mu.Unlock()
+			ok, _ := rf.sendInstallSnapshotRPC(server, currentTerm)
+			if ok == true {
+				//go rf.tryCommit(currentTerm, server)
+			}
+			return
+		}
 		prevLog = rf.logs.Entries[0]
+		//DPrintf("prevLog: [%d %d %s]", prevLog.CurrentTerm, prevLog.CurrentIndex, prevLog.Command)
 	}
 	allLog := rf.logs.getFrom(nextCommitIndex)
 	allLog.Entries = append([]Entry{createEntry(rf.logs.getLastIncludedTerm(), rf.logs.getLastIncludedIndex(), "snapshot")}, allLog.Entries[:]...)
@@ -560,12 +617,12 @@ func (rf *Raft) tryCommit(currentTerm int, server int) {
 		LeaderCommit: rf.commitIndex,
 	}
 	reply := &AppendEntriesReply{}
-	rf.mu.Unlock()
+	//rf.mu.Unlock()
 
-	//DPrintf("leader[%d]给[%d]发送[%d]之后的log:\n%s", rf.me, server, prevLog.CurrentIndex, allLog.String())
+	//DPrintf("leader[%d]给[%d]发送[%d]及之后的log:\n%s", rf.me, server, prevLog.CurrentIndex+1, allLog.String())
 	//DPrintf("服务[%d]发送Commit Append RPC包", rf.me)
 	ok := rf.peers[server].Call("Raft.AppendEntriesRPC", args, reply)
-	//DPrintf("服务[%d]给[%d]发送[%d]的结果[%v], [%v]", rf.me, server, prevLog.CurrentIndex, ok, reply.Success)
+	//DPrintf("服务[%d]给[%d]发送[%d]的结果[%v], [%v]", rf.me, server, prevLog.CurrentIndex+1, ok, reply.Success)
 	if ok == false || currentTerm < rf.currentTerm || rf.role != LEADER {
 		if reply.CurrentTerm > rf.currentTerm {
 			rf.transferToFollower(reply.CurrentTerm)
@@ -579,13 +636,13 @@ func (rf *Raft) tryCommit(currentTerm int, server int) {
 		return
 	} else if reply.Success == true {
 		if args.Entries.empty() == false {
-			rf.mu.Lock()
+			//rf.mu.Lock()
 			if currentTerm == rf.currentTerm && rf.role == LEADER {
 				matchIndex := args.Entries.getLastLog().CurrentIndex
 				rf.matchIndex[server] = max(rf.matchIndex[server], matchIndex)
 				rf.nextIndex[server] = max(rf.nextIndex[server], rf.matchIndex[server]+1)
 			}
-			rf.mu.Unlock()
+			//rf.mu.Unlock()
 		}
 	} else if reply.Success == false {
 		rf.mu.Lock()
@@ -633,22 +690,24 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	//1. 加锁保证index每次+1
 	//DPrintf("LEADER[%d]等锁", rf.me)
-	rf.mu.Lock()
+	//rf.mu.Lock()
 	//DPrintf("Term[%d]leader[%d]收到command[%v],开始共识", rf.currentTerm, rf.me, command)
 	prevLog := rf.logs.getLastLog()
 	term = rf.currentTerm
 	index = prevLog.CurrentIndex + 1
 	if rf.role == LEADER && rf.currentTerm == term {
 		rf.logs.appendLastLog(term, index, command)
+		rf.mu.Lock()
 		rf.persist()
+		rf.mu.Unlock()
 		isLeader = true //必须返回true
 		//DPrintf("leader服务[%d]开启新的共识[%d], leader日志:\n%s", rf.me, index, rf.logs)
 		// 更新leader自己的nextIndex和matchIndex
 		rf.matchIndex[rf.me] = max(rf.matchIndex[rf.me], index)
 		rf.nextIndex[rf.me] = max(rf.nextIndex[rf.me], rf.matchIndex[rf.me]+1)
 	}
-	rf.mu.Unlock()
-	//DPrintf("结束共识")
+	//rf.mu.Unlock()
+	//DPrintf("结束共识, 返回[%d %d %v]", index, term, isLeader)
 	return index, term, isLeader
 }
 
@@ -687,43 +746,44 @@ func (rf *Raft) listenCommit(currentTerm int) {
 
 			go rf.tryCommit(currentTerm, server)
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(25 * time.Millisecond)
 	}
 }
 
 func (rf *Raft) listenStateMachine() {
 	// 单线程，需要保证apply的顺序
 	for rf.killed() == false {
+		//DPrintf("服务[%d]的commitIndex:[%d],lastApply:[%d] 当前日志\n%s", rf.me, rf.commitIndex, rf.lastApplied, rf.logs)
 		if rf.commitIndex > rf.lastApplied {
 			rf.mu.Lock()
 			index := rf.lastApplied + 1
 			entry := rf.logs.find(index)
-			DPrintf("服务[%d] commitIndex:[%d], 正在apply:[%d, %d, %v]", rf.me, rf.commitIndex, entry.CurrentTerm, index, entry.Command)
+
 			if entry.CurrentIndex < 0 {
 				rf.mu.Unlock()
-				time.Sleep(50 * time.Millisecond)
+				time.Sleep(25 * time.Millisecond)
 				continue
 			}
+			DPrintf("服务[%d] commitIndex:[%d], lastApply[%d], 正在apply:[%d, %d, %v]", rf.me, rf.commitIndex, rf.lastApplied, entry.CurrentTerm, index, entry.Command)
 			rf.lastApplied += 1
 
 			msg := ApplyMsg{
 				CommandValid:  true,
 				Command:       entry.Command,
 				CommandIndex:  entry.CurrentIndex,
-				SnapshotValid: false, //todo
-				Snapshot:      nil,   //todo
-				SnapshotTerm:  0,     //todo
-				SnapshotIndex: 0,     //todo
+				SnapshotValid: false,
+				Snapshot:      nil,
+				SnapshotTerm:  0,
+				SnapshotIndex: 0,
 			}
 			rf.mu.Unlock()
-
 			rf.stateMachine <- msg
 
 			//DPrintf("服务[%d]将日志[%s]加入状态机,apply:%d, commitIndex: %d, logs:\n%s", rf.me, entry, rf.lastApplied, entry.CurrentIndex, rf.logs)
 			//DPrintf("服务[%d]将日志[%d, %d]加入状态机,apply:%d, commitIndex: %d", rf.me, entry.CurrentTerm, entry.CurrentIndex, rf.lastApplied, entry.CurrentIndex)
 			//rf.mu.Unlock()
 		} else {
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(25 * time.Millisecond)
 		}
 
 	}
@@ -745,10 +805,9 @@ func (rf *Raft) ticker() {
 			currentTerm := rf.transferToCandidate()
 			go rf.startElection(currentTerm)
 			//time.Sleep(rf.electionTime - time.Duration(300)*time.Millisecond) // 额外休眠，防止抢别人时间
-			time.Sleep(150 * time.Millisecond)
-			rf.lastRPCTime = time.Now()
+			time.Sleep(25 * time.Millisecond)
 		}
-		time.Sleep(time.Millisecond * time.Duration(rand.Intn(300)))
+		time.Sleep(time.Millisecond * time.Duration(rand.Intn(125)))
 	}
 }
 

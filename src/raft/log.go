@@ -55,10 +55,26 @@ func (l *Log) len() int {
 func (l *Log) indexAt(currentIndex int) int {
 	index := currentIndex - l.getLastIncludedIndex()
 	if index < 0 || index >= l.len() {
+		//DPrintf("indexAt [%d]的下标：[%d]", currentIndex, index)
 		return -1
 	}
 	if index == 0 && l.Entries[index].CurrentIndex != currentIndex {
+		//DPrintf("indexAt [%d], index[0]的index:[%d]", currentIndex, l.Entries[0].CurrentIndex)
 		return -1
+	}
+	return index
+}
+
+// 找到>currentIndex的日志位置，不查找快照。如果不存在则返回l.len()
+func (l *Log) indexAtAfter(currentIndex int) int {
+	index := l.indexAt(currentIndex)
+	if index >= 0 {
+		return index + 1
+	}
+
+	index = 1
+	for index < l.len() && l.Entries[index].CurrentIndex <= currentIndex {
+		index += 1
 	}
 	return index
 }
@@ -129,6 +145,7 @@ func (l *Log) appendLog(index int, entries Log) {
 	if index <= 0 {
 		panic("appendLog index <= 0")
 	}
+	//DPrintf("appendLog: %s", entries)
 	l.Entries = append(l.Entries[:index], entries.Entries[1:]...)
 }
 
@@ -141,13 +158,52 @@ func (l *Log) appendLastLog(term, index int, command interface{}) {
 	return
 }
 
+func (l *Log) updateSnapshot(lastIncludedTerm int, lastIncludedIndex int) bool {
+	if l.Entries[0].CurrentIndex >= lastIncludedIndex {
+		return false
+	}
+	index := l.indexAt(lastIncludedIndex)
+	//DPrintf("updateSnapshot: %s", l)
+	// 不存在，全删
+	if index < 0 {
+		index = l.indexAtAfter(lastIncludedIndex)
+		l.Entries[0] = createEntry(lastIncludedTerm, lastIncludedIndex, fmt.Sprintf("[%d %d]snapshot", lastIncludedTerm, lastIncludedIndex))
+		l.Entries = append(append([]Entry{}, l.Entries[0]), l.Entries[index:]...)
+	} else if l.Entries[index].CurrentTerm != lastIncludedTerm {
+		l.Entries[0] = createEntry(lastIncludedTerm, lastIncludedIndex, fmt.Sprintf("[%d %d]snapshot", lastIncludedTerm, lastIncludedIndex))
+		l.Entries = append(append([]Entry{}, l.Entries[0]), l.Entries[index:]...)
+	} else {
+		l.Entries[0] = createEntry(lastIncludedTerm, lastIncludedIndex, fmt.Sprintf("[%d %d]snapshot", lastIncludedTerm, lastIncludedIndex))
+		l.Entries = append(append([]Entry{}, l.Entries[0]), l.Entries[index+1:]...)
+	}
+
+	//DPrintf("index[%d]的log: [%d, %d], 期望的日志:[%d, %d]", index, l.Entries[index].CurrentTerm, l.Entries[index].CurrentIndex, lastIncludedTerm, lastIncludedIndex)
+	//oldLen := l.len()
+	//l.Entries[0] = createEntry(lastIncludedTerm, lastIncludedIndex, fmt.Sprintf("[%d %d]snapshot", lastIncludedTerm, lastIncludedIndex))
+
+	//DPrintf("日志快照后长度 %d -> %d, 新的日志\n%v", oldLen, l.len(), l)
+	return true
+}
+
+// 删除[1,index]的日志
+func (l *Log) eraseBefore(index int) {
+	if index <= 0 || index >= l.len() {
+		fmt.Printf("erase index: %d\n", index)
+		panic("erase error index")
+	}
+
+	l.Entries = append([]Entry{l.Entries[0]}, l.Entries[index+1:]...)
+}
+
 // 检查Leader的PrevLog在server日志中是否存在
 // 1. prevLog超过server日志范围，返回 false, -1, len(log)
 // 2. 存在prevLogIndex但是Term不匹配，conflictTerm = log[prevLogIndex].Term，然后找到Term==conflictTerm的第一个日志
 // 如果存在，还会返回在数组中的下标和对应的term和日志index
 func (l *Log) checkPrevLogExist(currentTerm, currentIndex int) (bool, int, int) {
+	//DPrintf("checkPrevLogExist indexat")
 	index := l.indexAt(currentIndex)
 	if index < 0 {
+		//DPrintf("checkPrevLogExist index < 0")
 		return false, -1, l.getLastLog().CurrentIndex
 	}
 	//oldLog := make([]Entry, l.len())
