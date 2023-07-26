@@ -10,7 +10,7 @@ package main
 // Please do not change this file.
 //
 
-import "6.824/src/mr"
+import "6.5840/mr"
 import "plugin"
 import "os"
 import "fmt"
@@ -27,10 +27,8 @@ func main() {
 	mr.Worker(mapf, reducef)
 }
 
-//
 // load the application Map and Reduce functions
 // from a plugin file, e.g. ../mrapps/wc.so
-//
 func loadPlugin(filename string) (func(string, string) []mr.KeyValue, func(string, []string) string) {
 	p, err := plugin.Open(filename)
 	if err != nil {

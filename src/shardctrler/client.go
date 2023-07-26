@@ -4,7 +4,7 @@ package shardctrler
 // Shardctrler clerk.
 //
 
-import "6.824/src/labrpc"
+import "6.5840/labrpc"
 import "time"
 import "crypto/rand"
 import "math/big"

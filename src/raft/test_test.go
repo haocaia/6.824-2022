@@ -30,18 +30,18 @@ func TestInitialElection2A(t *testing.T) {
 	cfg.checkOneLeader()
 
 	// sleep a bit to avoid racing with followers learning of the
-	// election, then check that all peers agree on the Term.
+	// election, then check that all peers agree on the term.
 	time.Sleep(50 * time.Millisecond)
 	term1 := cfg.checkTerms()
 	if term1 < 1 {
-		t.Fatalf("Term is %v, but should be at least 1", term1)
+		t.Fatalf("term is %v, but should be at least 1", term1)
 	}
 
-	// does the leader+Term stay the same if there is no network failure?
+	// does the leader+term stay the same if there is no network failure?
 	time.Sleep(2 * RaftElectionTimeout)
 	term2 := cfg.checkTerms()
 	if term1 != term2 {
-		fmt.Printf("warning: Term changed even though there were no failures")
+		fmt.Printf("warning: term changed even though there were no failures")
 	}
 
 	// there should still be a leader.
@@ -146,10 +146,8 @@ func TestBasicAgree2B(t *testing.T) {
 	cfg.end()
 }
 
-//
 // check, based on counting bytes of RPCs, that
-// each Command is sent to each peer just once.
-//
+// each command is sent to each peer just once.
 func TestRPCBytes2B(t *testing.T) {
 	servers := 3
 	cfg := make_config(t, servers, false, false)
@@ -181,10 +179,8 @@ func TestRPCBytes2B(t *testing.T) {
 	cfg.end()
 }
 
-//
 // test just failure of followers.
-//
-func For2023TestFollowerFailure2B(t *testing.T) {
+func TestFollowerFailure2B(t *testing.T) {
 	servers := 3
 	cfg := make_config(t, servers, false, false)
 	defer cfg.cleanup()
@@ -208,7 +204,7 @@ func For2023TestFollowerFailure2B(t *testing.T) {
 	cfg.disconnect((leader2 + 1) % servers)
 	cfg.disconnect((leader2 + 2) % servers)
 
-	// submit a Command.
+	// submit a command.
 	index, _, ok := cfg.rafts[leader2].Start(104)
 	if ok != true {
 		t.Fatalf("leader rejected Start()")
@@ -219,7 +215,7 @@ func For2023TestFollowerFailure2B(t *testing.T) {
 
 	time.Sleep(2 * RaftElectionTimeout)
 
-	// check that Command 104 did not commit.
+	// check that command 104 did not commit.
 	n, _ := cfg.nCommitted(index)
 	if n > 0 {
 		t.Fatalf("%v committed but no majority", n)
@@ -228,10 +224,8 @@ func For2023TestFollowerFailure2B(t *testing.T) {
 	cfg.end()
 }
 
-//
 // test just failure of leaders.
-//
-func For2023TestLeaderFailure2B(t *testing.T) {
+func TestLeaderFailure2B(t *testing.T) {
 	servers := 3
 	cfg := make_config(t, servers, false, false)
 	defer cfg.cleanup()
@@ -254,14 +248,14 @@ func For2023TestLeaderFailure2B(t *testing.T) {
 	leader2 := cfg.checkOneLeader()
 	cfg.disconnect(leader2)
 
-	// submit a Command to each server.
+	// submit a command to each server.
 	for i := 0; i < servers; i++ {
 		cfg.rafts[i].Start(104)
 	}
 
 	time.Sleep(2 * RaftElectionTimeout)
 
-	// check that Command 104 did not commit.
+	// check that command 104 did not commit.
 	n, _ := cfg.nCommitted(4)
 	if n > 0 {
 		t.Fatalf("%v committed but no majority", n)
@@ -270,10 +264,8 @@ func For2023TestLeaderFailure2B(t *testing.T) {
 	cfg.end()
 }
 
-//
 // test that a follower participates after
 // disconnect and re-connect.
-//
 func TestFailAgree2B(t *testing.T) {
 	servers := 3
 	cfg := make_config(t, servers, false, false)
@@ -404,7 +396,7 @@ loop:
 
 		for j := 0; j < servers; j++ {
 			if t, _ := cfg.rafts[j].GetState(); t != term {
-				// Term changed -- can't expect low RPC counts
+				// term changed -- can't expect low RPC counts
 				continue loop
 			}
 		}
@@ -454,7 +446,7 @@ loop:
 	}
 
 	if !success {
-		t.Fatalf("Term changed too often")
+		t.Fatalf("term changed too often")
 	}
 
 	cfg.end()
@@ -473,7 +465,7 @@ func TestRejoin2B(t *testing.T) {
 	leader1 := cfg.checkOneLeader()
 	cfg.disconnect(leader1)
 
-	// make old leader try to agree on some Entries
+	// make old leader try to agree on some entries
 	cfg.rafts[leader1].Start(102)
 	cfg.rafts[leader1].Start(103)
 	cfg.rafts[leader1].Start(104)
@@ -620,7 +612,7 @@ loop:
 				continue loop
 			}
 			if !ok {
-				// No longer the leader, so Term has changed
+				// No longer the leader, so term has changed
 				continue loop
 			}
 			if starti+i != index1 {
@@ -632,7 +624,7 @@ loop:
 			cmd := cfg.wait(starti+i, servers, term)
 			if ix, ok := cmd.(int); ok == false || ix != cmds[i-1] {
 				if ix == -1 {
-					// Term changed -- try again
+					// term changed -- try again
 					continue loop
 				}
 				t.Fatalf("wrong value %v committed for index %v; expected %v\n", cmd, starti+i, cmds)
@@ -643,7 +635,7 @@ loop:
 		total2 = 0
 		for j := 0; j < servers; j++ {
 			if t, _ := cfg.rafts[j].GetState(); t != term {
-				// Term changed -- can't expect low RPC counts
+				// term changed -- can't expect low RPC counts
 				// need to keep going to update total2
 				failed = true
 			}
@@ -655,7 +647,7 @@ loop:
 		}
 
 		if total2-total1 > (iters+1+3)*3 {
-			t.Fatalf("too many RPCs (%v) for %v Entries\n", total2-total1, iters)
+			t.Fatalf("too many RPCs (%v) for %v entries\n", total2-total1, iters)
 		}
 
 		success = true
@@ -663,7 +655,7 @@ loop:
 	}
 
 	if !success {
-		t.Fatalf("Term changed too often")
+		t.Fatalf("term changed too often")
 	}
 
 	time.Sleep(RaftElectionTimeout)
@@ -802,16 +794,14 @@ func TestPersist32C(t *testing.T) {
 	cfg.end()
 }
 
-//
 // Test the scenarios described in Figure 8 of the extended Raft paper. Each
-// iteration asks a leader, if there is one, to insert a Command in the Raft
+// iteration asks a leader, if there is one, to insert a command in the Raft
 // log.  If there is a leader, that leader will fail quickly with a high
-// probability (perhaps without committing the Command), or crash after a while
-// with low probability (most likey committing the Command).  If the number of
+// probability (perhaps without committing the command), or crash after a while
+// with low probability (most likey committing the command).  If the number of
 // alive servers isn't enough to form a majority, perhaps start a new server.
-// The leader in a new Term may try to finish replicating log Entries that
+// The leader in a new term may try to finish replicating log entries that
 // haven't been committed yet.
-//
 func TestFigure82C(t *testing.T) {
 	servers := 5
 	cfg := make_config(t, servers, false, false)
@@ -1000,7 +990,7 @@ func internalChurn(t *testing.T, unreliable bool) {
 								values = append(values, x)
 							}
 						} else {
-							cfg.t.Fatalf("wrong Command type")
+							cfg.t.Fatalf("wrong command type")
 						}
 						break
 					}
@@ -1192,11 +1182,9 @@ func TestSnapshotInstallUnCrash2D(t *testing.T) {
 	snapcommon(t, "Test (2D): install snapshots (unreliable+crash)", false, false, true)
 }
 
-//
 // do the servers persist the snapshots, and
 // restart using snapshot along with the
 // tail of the log?
-//
 func TestSnapshotAllCrash2D(t *testing.T) {
 	servers := 3
 	iters := 5
@@ -1232,5 +1220,51 @@ func TestSnapshotAllCrash2D(t *testing.T) {
 			t.Fatalf("index decreased from %v to %v", index1, index2)
 		}
 	}
+	cfg.end()
+}
+
+// do servers correctly initialize their in-memory copy of the snapshot, making
+// sure that future writes to persistent state don't lose state?
+func TestSnapshotInit2D(t *testing.T) {
+	servers := 3
+	cfg := make_config(t, servers, false, true)
+	defer cfg.cleanup()
+
+	cfg.begin("Test (2D): snapshot initialization after crash")
+	cfg.one(rand.Int(), servers, true)
+
+	// enough ops to make a snapshot
+	nn := SnapShotInterval + 1
+	for i := 0; i < nn; i++ {
+		cfg.one(rand.Int(), servers, true)
+	}
+
+	// crash all
+	for i := 0; i < servers; i++ {
+		cfg.crash1(i)
+	}
+
+	// revive all
+	for i := 0; i < servers; i++ {
+		cfg.start1(i, cfg.applierSnap)
+		cfg.connect(i)
+	}
+
+	// a single op, to get something to be written back to persistent storage.
+	cfg.one(rand.Int(), servers, true)
+
+	// crash all
+	for i := 0; i < servers; i++ {
+		cfg.crash1(i)
+	}
+
+	// revive all
+	for i := 0; i < servers; i++ {
+		cfg.start1(i, cfg.applierSnap)
+		cfg.connect(i)
+	}
+
+	// do another op to trigger potential bug
+	cfg.one(rand.Int(), servers, true)
 	cfg.end()
 }

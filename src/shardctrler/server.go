@@ -1,10 +1,10 @@
 package shardctrler
 
 
-import "6.824/src/raft"
-import "6.824/src/labrpc"
+import "6.5840/raft"
+import "6.5840/labrpc"
 import "sync"
-import "6.824/src/labgob"
+import "6.5840/labgob"
 
 
 type ShardCtrler struct {
@@ -41,12 +41,10 @@ func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
 }
 
 
-//
 // the tester calls Kill() when a ShardCtrler instance won't
 // be needed again. you are not required to do anything
 // in Kill(), but it might be convenient to (for example)
 // turn off debug output from this instance.
-//
 func (sc *ShardCtrler) Kill() {
 	sc.rf.Kill()
 	// Your code here, if desired.
@@ -57,12 +55,10 @@ func (sc *ShardCtrler) Raft() *raft.Raft {
 	return sc.rf
 }
 
-//
 // servers[] contains the ports of the set of
 // servers that will cooperate via Raft to
 // form the fault-tolerant shardctrler service.
 // me is the index of the current server in servers[].
-//
 func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister) *ShardCtrler {
 	sc := new(ShardCtrler)
 	sc.me = me

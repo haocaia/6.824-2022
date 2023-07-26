@@ -1,3 +1,3 @@
-module 6.824/src
+module 6.5840
 
-go 1.17
+go 1.15

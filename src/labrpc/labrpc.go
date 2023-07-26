@@ -1,7 +1,7 @@
 package labrpc
 
 //
-// channel-based RPC, for 824 labs.
+// channel-based RPC, for 6.5840 labs.
 //
 // simulates a network that can lose requests, lose replies,
 // delay messages, and entirely disconnect particular hosts.
@@ -49,7 +49,7 @@ package labrpc
 //   pass svc to srv.AddService()
 //
 
-import "6.824/src/labgob"
+import "6.5840/labgob"
 import "bytes"
 import "reflect"
 import "sync"
@@ -379,11 +379,9 @@ func (rn *Network) GetTotalBytes() int64 {
 	return x
 }
 
-//
 // a server is a collection of services, all sharing
 // the same rpc dispatcher. so that e.g. both a Raft
 // and a k/v server can listen to the same rpc endpoint.
-//
 type Server struct {
 	mu       sync.Mutex
 	services map[string]*Service
