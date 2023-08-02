@@ -39,7 +39,7 @@ func (log *Log) GetLastEntryTerm() int {
 	return log.entry[length-1].term
 }
 
-func (log *Log) Before(index, term int) bool {
+func (log *Log) BeforeOf(index, term int) bool {
 	e := log.GetLastEntry()
 	currentIndex := e.index
 	currentTerm := e.term

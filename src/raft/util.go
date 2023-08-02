@@ -4,6 +4,7 @@ import "log"
 
 // Debugging
 const Debug = false
+const DEFAULT_SLEEP_MS = 50
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -24,4 +25,8 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func isOutDate(argsTerm, term int) bool {
+	return argsTerm < term
 }

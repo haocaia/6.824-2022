@@ -73,6 +73,8 @@ type Raft struct {
 
 	nextIndex  []int
 	matchIndex []int
+
+	rpcCh chan int
 }
 
 // return currentTerm and whether this server
@@ -178,11 +180,28 @@ func (rf *Raft) ticker() {
 
 		// Your code here (2A)
 		// Check if a leader election should be started.
-
+		if isLeader(rf.role) {
+			go rf.sendHeartToAll()
+		}
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
 		ms := 50 + (rand.Int63() % 300)
 		time.Sleep(time.Duration(ms) * time.Millisecond)
+	}
+}
+
+// 这个方法中不允许直接执行函数, 统一创建协程处理!!!
+func (rf *Raft) rpcListener() {
+	for rf.killed() == false {
+		ms := 50 + (rand.Int63() % 300)
+		select {
+		case <-time.After(time.Duration(ms) * time.Millisecond):
+			// 开启选举
+			go rf.startElection()
+		case <-rf.rpcCh:
+			// 接收到RPC, 可以重置选举时间
+			time.Sleep(time.Duration(ms) * time.Millisecond)
+		}
 	}
 }
 
@@ -213,26 +232,110 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
 
+	rf.rpcCh = make(chan int, 0)
+
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
+	go rf.rpcListener()
 
 	return rf
+}
+
+func (rf *Raft) sendHeartToAll() {
+
+}
+
+func (rf *Raft) startElection() {
+	rf.mu.Lock()
+	rf.term = rf.term + 1
+	rf.TransToCandidate(rf.me, rf.term)
+	term := rf.term
+	lastLogIndex := rf.log.GetLastEntryIndex()
+	lastLogTerm := rf.log.GetLastEntryTerm()
+	rf.mu.Unlock()
+
+	voteMe := 1
+	numWin := (len(rf.peers) + 1) / 2
+	numReplied := 1
+
+	args := &RequestVoteArgs{
+		Term:         term,
+		Id:           rf.me,
+		LastLogIndex: lastLogIndex,
+		LastLogTerm:  lastLogTerm,
+	}
+
+	for server := 0; server < len(rf.peers); server += 1 {
+		reply := &RequestVoteReply{
+			Term:        -1,
+			VoteGranted: false,
+		}
+		// 如果启动选举时的term < rf.term， 说明该请求已过期，不再处理
+		if isOutDate(term, rf.term) {
+			return
+		}
+		go func() {
+			rf.sendRequestVote(server, args, reply)
+			rf.mu.Lock()
+			numReplied += 1
+			rf.mu.Unlock()
+			if rf.term < reply.Term {
+				rf.mu.Lock()
+				rf.TransToFollower(reply.Term)
+				rf.mu.Unlock()
+				return
+			}
+			if isOutDate(term, rf.term) {
+				return
+			}
+			if reply.VoteGranted {
+				voteMe += 1
+			}
+		}()
+	}
+
+	maxWaitMs := 360
+	maxTime := time.Now().Add(time.Duration(maxWaitMs) * time.Millisecond)
+	for numReplied < len(rf.peers) && voteMe < numWin && !isOutDate(term, rf.term) && time.Now().Before(maxTime) {
+		time.Sleep(time.Duration(DEFAULT_SLEEP_MS) * time.Millisecond)
+	}
+
+	if voteMe >= numWin && !isOutDate(term, rf.term) {
+		rf.mu.Lock()
+		rf.TransToLeader(term)
+		rf.mu.Unlock()
+	}
+
+}
+
+func (rf *Raft) TransToLeader(term int) {
+	if rf.term > term {
+		return
+	}
+
+	rf.role = LEADER
+	rf.vote = -1
+
+	lastLogIndex := rf.log.GetLastEntryIndex()
+	for server := 0; server < len(rf.peers); server += 1 {
+		rf.nextIndex[server] = lastLogIndex + 1
+		rf.matchIndex[server] = 0
+	}
+
+	go rf.sendHeartToAll()
 }
 
 func (rf *Raft) TransToFollower(term int) {
 	if rf.term >= term {
 		return
 	}
-	rf.mu.Lock()
 
 	rf.role = FOLLOWER
 	rf.vote = -1
 	rf.term = max(term, rf.term)
-
-	rf.mu.Unlock()
 }
 
 func (rf *Raft) TransToCandidate(id, term int) {
@@ -241,4 +344,9 @@ func (rf *Raft) TransToCandidate(id, term int) {
 	}
 	rf.role = CANDIDATE
 	rf.vote = id
+	rf.rpcCh <- 1
+}
+
+func isLeader(role string) bool {
+	return role == LEADER
 }

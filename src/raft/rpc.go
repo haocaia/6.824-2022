@@ -27,7 +27,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 
 	if rpcValid == 1 {
+		rf.mu.Lock
 		rf.TransToFollower(args.Term)
+		rf.mu.Unlock
 	}
 
 	lastLogIndex := args.LastLogIndex
@@ -35,7 +37,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	rf.mu.Lock()
 	raftTerm = rf.term
-	if rf.log.Before(lastLogIndex, lastLogTerm) &&
+	if rf.log.BeforeOf(lastLogIndex, lastLogTerm) &&
 		(rf.vote == -1 || rf.vote == args.Id) {
 		rf.TransToCandidate(args.Id, args.Term)
 
