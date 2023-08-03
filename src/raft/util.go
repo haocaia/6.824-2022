@@ -13,6 +13,14 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
+func DPrintln(format string, a ...interface{}) (n int, err error) {
+	if Debug {
+		log.Printf(format, a...)
+		log.Println()
+	}
+	return
+}
+
 func max(a, b int) int {
 	if a > b {
 		return a
