@@ -20,7 +20,7 @@ func EmptyEntry() Entry {
 
 func EmptyLog() Log {
 	return Log{
-		Entry: []Entry{EmptyEntry()},
+		Entry: []Entry{},
 	}
 }
 
@@ -72,12 +72,26 @@ func (log *Log) size() int {
 	return len(log.Entry)
 }
 
-// 查找logIndex的日志在切片中的下标i
+// 查找logIndex的日志在切片中的期望下标i
+// 不对范围做检查
 func (log *Log) index(logIndex int) int {
 	// TODO: 日志压缩
 	return logIndex - 1
 }
 
+func (log *Log) GetEntryWithLogIndex(logIndex int) Entry {
+	i := log.index(logIndex)
+	if i == -1 {
+		return EmptyEntry()
+	}
+	if i >= log.size() {
+		err := fmt.Sprintf("GetEntryWithLogIndex out of bound. Expect log index = [%d], i = [%d], but size = [%d]", logIndex, i, log.size())
+		panic(err)
+	}
+	return log.Entry[i]
+}
+
+// 根据下标访问
 func (log *Log) get(i int) Entry {
 	if i == -1 {
 		return EmptyEntry()
@@ -124,6 +138,72 @@ func (log *Log) merge(newLog Log) {
 	result := append([]Entry{}, log.Entry[:startIndex]...)
 	result = append(result, newLog.Entry[i:]...)
 	log.Entry = result
+}
+
+func (log *Log) appendEntry(command interface{}, term int) int {
+	// 从1开始计数
+	index := log.size() + 1
+	log.Entry = append(log.Entry, Entry{
+		Command: command,
+		Term:    term,
+		Index:   index,
+	})
+	return index
+}
+
+func (log *Log) GetPrevLogIndex(logIndex int) int {
+	i := log.index(max(0, logIndex - 1))
+	if i == -1 {
+		return 0
+	}
+	if i >= log.size() {
+		err := fmt.Sprintf("GetPrevLogIndex out of bound. Expect i = [%d] but len = [%d]", i, log.size())
+		panic(err)
+	}
+	return log.get(i).Index
+}
+
+func (log *Log) GetPrevLogTerm(logIndex int) int {
+	i := log.index(max(0, logIndex - 1))
+	if i == -1 {
+		return 0
+	}
+	if i >= log.size() {
+		err := fmt.Sprintf("GetPrevLogIndex out of bound. Expect i = [%d] but len = [%d]", i, log.size())
+		panic(err)
+	}
+	return log.get(i).Term
+}
+
+func (log *Log) GetLogFromLogIndex(logIndex int) Log {
+	i := log.index(logIndex)
+	if i < -1 {
+		err := fmt.Sprintf("GetLogFromLogIndex: logIndex[%d] is not in slice now.", logIndex)
+		panic(err)
+	}
+	if i >= log.size() {
+		err := fmt.Sprintf("GetLogFromLogIndex out of bound. Expect i = [%d] but len = [%d]", i, log.size())
+		panic(err)
+	}
+	newLog := EmptyLog()
+	newLog.Entry = append(newLog.Entry, log.Entry[i:]...)
+	return newLog
+}
+
+func CreateLogWithOneEntry(command interface{}, index int, term int) Log {
+	return Log{
+		Entry: []Entry{
+			createEntry(command, index, term),
+		},
+	}
+}
+
+func createEntry(command interface{}, index int, term int) Entry {
+	return Entry{
+		Command: command,
+		Term:    term,
+		Index:   index,
+	}
 }
 
 func (e Entry) equal(v Entry) bool {

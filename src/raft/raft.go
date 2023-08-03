@@ -18,6 +18,7 @@ package raft
 //
 
 import (
+	"fmt"
 	//	"bytes"
 	"math/rand"
 	"sync"
@@ -62,6 +63,7 @@ type Raft struct {
 	persister *Persister          // Object to hold this peer's persisted state
 	me        int                 // this peer's Index into peers[]
 	dead      int32               // set by Kill()
+	applyCh chan ApplyMsg
 
 	role string
 	term int
@@ -75,6 +77,7 @@ type Raft struct {
 	matchIndex []int
 
 	receiveRPC bool
+	firstIndex int
 }
 
 // return currentTerm and whether this server
@@ -147,11 +150,25 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
-	isLeader := true
+	leader := isLeader(rf.role)
 
-	// Your code here (2B).
+	if !leader {
+		return index, term, leader
+	}
 
-	return index, term, isLeader
+	rf.mu.Lock()
+	term = rf.term
+	index = rf.log.appendEntry(command, term)
+	if rf.firstIndex == -1 {
+		rf.firstIndex = index
+	}
+	rf.matchIndex[rf.me] = index
+	rf.mu.Unlock()
+
+	DPrintln("[%d]新增一条log[%d]", rf.me, rf.log.GetLastEntryIndex())
+	go rf.sendAppendEntriesToAll(term)
+
+	return index, term, leader
 }
 
 // the tester doesn't halt goroutines created by Raft after each test,
@@ -202,6 +219,70 @@ func (rf *Raft) rpcListener() {
 	}
 }
 
+func (rf *Raft) commitListener() {
+	for rf.killed() == false {
+		// TODO: 超时时间设置为了至少1个心跳时间+随机的300ms, 如果超时可以稍微减少
+		ms := DEFAULT_SLEEP_MS + (rand.Int63() % 50)
+		term := rf.term
+		if isLeader(rf.role) {
+			update := false
+			index := max(rf.firstIndex, rf.commitIndex + 1)
+			if rf.log.GetEntryWithLogIndex(index).Term == term {
+				num := 0
+				numNeed := (len(rf.peers) + 1) / 2
+				for server := 0; server < len(rf.peers); server += 1 {
+					if rf.matchIndex[server] >= index {
+						num += 1
+					}
+				}
+				rf.mu.Lock()
+				if num >= numNeed && term == rf.term && isLeader(rf.role) && rf.log.GetEntryWithLogIndex(index).Term == term {
+					DPrintln("[%d] 更新commit index到[%d]", rf.me, rf.commitIndex)
+					rf.commitIndex = max(rf.commitIndex, index)
+					update = true
+				}
+				rf.mu.Unlock()
+			}
+			if !update {
+				time.Sleep(time.Duration(ms) * time.Millisecond)
+			}
+		} else {
+			time.Sleep(time.Duration(ms) * time.Millisecond)
+		}
+
+	}
+}
+
+func (rf *Raft) applyListener() {
+	for rf.killed() == false {
+		ms := DEFAULT_SLEEP_MS + (rand.Int63() % 50)
+		if rf.commitIndex > rf.lastApplied {
+			success := false
+			index := rf.lastApplied + 1
+			if index <= rf.log.GetLastEntryIndex() {
+				entry := rf.log.GetEntryWithLogIndex(index)
+				msg := ApplyMsg{
+					CommandValid:  true,
+					Command:       entry.Command,
+					CommandIndex:  entry.Index,
+					SnapshotValid: false,
+					Snapshot:      nil,
+					SnapshotTerm:  0,
+					SnapshotIndex: 0,
+				}
+				rf.applyCh <- msg
+				DPrintln("[%d] apply msg: [%d]", rf.me, index)
+				success = true
+			}
+			if !success {
+				time.Sleep(time.Duration(ms) * time.Millisecond)
+			}
+		} else {
+			time.Sleep(time.Duration(ms) * time.Millisecond)
+		}
+	}
+}
+
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
 // server's port is peers[me]. all the servers' peers[] arrays
@@ -217,6 +298,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
+	rf.applyCh = applyCh
 
 	rf.role = FOLLOWER
 	rf.term = 0
@@ -237,8 +319,54 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// start ticker goroutine to start elections
 	go rf.ticker()
 	go rf.rpcListener()
+	go rf.commitListener()
+	go rf.applyListener()
 
 	return rf
+}
+
+func (rf *Raft) sendAppendEntriesToAll(term int) {
+	for server := 0; server < len(rf.peers); server += 1 {
+		if server == rf.me {
+			continue
+		}
+		if isOutDate(term, rf.term) {
+			return
+		}
+		if !isLeader(rf.role) {
+			return
+		}
+
+		rf.mu.Lock()
+		nextIndex := rf.nextIndex[server]
+		prevLogIndex := rf.log.GetPrevLogIndex(nextIndex)
+		prevLogTerm := rf.log.GetPrevLogTerm(nextIndex)
+		commitIndex := rf.commitIndex
+		rf.mu.Unlock()
+
+		if rf.log.GetLastEntryIndex() < nextIndex {
+			err := fmt.Sprintf("last log index < next index. [%d] < [%d]", rf.log.GetLastEntryIndex(), nextIndex)
+			panic(err)
+		}
+
+		args := &AppendEntriesArgs{
+			Term:         term,
+			Id:           rf.me,
+			PrevLogIndex: prevLogIndex,
+			PrevLogTerm:  prevLogTerm,
+			Log:          rf.log.GetLogFromLogIndex(nextIndex),
+			CommitIndex:  commitIndex,
+		}
+		reply := &AppendEntriesReply{
+			Term:    term,
+			Success: false,
+		}
+		if args.Log.empty() {
+			panic("新日志的内容为空")
+		}
+		DPrintln("[%d] 尝试给[%d]发送日志from [%d]", rf.me, server, args.Log.Entry[0].Index)
+		go rf.sendAppendEntries(server, args, reply)
+	}
 }
 
 func (rf *Raft) sendHeartToAll(term int) {
@@ -339,6 +467,7 @@ func (rf *Raft) TransToLeader(term int) {
 
 	rf.role = LEADER
 	rf.vote = -1
+	rf.firstIndex = -1
 
 	lastLogIndex := rf.log.GetLastEntryIndex()
 	for server := 0; server < len(rf.peers); server += 1 {

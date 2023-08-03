@@ -25,7 +25,7 @@ We supply you with skeleton code src/raft/raft.go. We also supply a set of tests
 When we grade your submissions, we will run the tests without the -race flag. However, you should check that your code does not have races, by running the tests with the -race flag as you develop your solution.
 
 To get up and running, execute the following commands. Don't forget the git pull to get the latest software.
-
+```
 $ cd ~/6.5840
 $ git pull
 ...
@@ -39,10 +39,11 @@ Test (2A): election after network failure ...
         config.go:326: expected one leader, got none
 ...
 $
+```
 The code
 Implement Raft by adding code to raft/raft.go. In that file you'll find skeleton code, plus examples of how to send and receive RPCs.
 Your implementation must support the following interface, which the tester and (eventually) your key/value server will use. You'll find more details in comments in raft.go.
-
+```
 // create a new Raft server instance:
 rf := Make(peers, me, persister, applyCh)
 
@@ -55,13 +56,14 @@ rf.GetState() (term, isLeader)
 // each time a new entry is committed to the log, each Raft peer
 // should send an ApplyMsg to the service (or tester).
 type ApplyMsg
+```
 A service calls Make(peers,me,…) to create a Raft peer. The peers argument is an array of network identifiers of the Raft peers (including this one), for use with RPC. The me argument is the index of this peer in the peers array. Start(command) asks Raft to start the processing to append the command to the replicated log. Start() should return immediately, without waiting for the log appends to complete. The service expects your implementation to send an ApplyMsg for each newly committed log entry to the applyCh channel argument to Make().
 
 raft.go contains example code that sends an RPC (sendRequestVote()) and that handles an incoming RPC (RequestVote()). Your Raft peers should exchange RPCs using the labrpc Go package (source in src/labrpc). The tester can tell labrpc to delay RPCs, re-order them, and discard them to simulate various network failures. While you can temporarily modify labrpc, make sure your Raft works with the original labrpc, since that's what we'll use to test and grade your lab. Your Raft instances must interact only with RPC; for example, they are not allowed to communicate using shared Go variables or files.
 
 Subsequent labs build on this lab, so it is important to give yourself enough time to write solid code.
 
-Part 2A: leader election (moderate)
+# Part 2A: leader election (moderate)
 Implement Raft leader election and heartbeats (AppendEntries RPCs with no log entries). The goal for Part 2A is for a single leader to be elected, for the leader to remain the leader if there are no failures, and for a new leader to take over if the old leader fails or if packets to/from the old leader are lost. Run go test -run 2A to test your 2A code.
 
 You can't easily run your Raft implementation directly; instead you should run it by way of the tester, i.e. go test -run 2A .
@@ -81,7 +83,7 @@ Don't forget to implement GetState().
 The tester calls your Raft's rf.Kill() when it is permanently shutting down an instance. You can check whether Kill() has been called using rf.killed(). You may want to do this in all loops, to avoid having dead Raft instances print confusing messages.
 Go RPC sends only struct fields whose names start with capital letters. Sub-structures must also have capitalized field names (e.g. fields of log records in an array). The labgob package will warn you about this; don't ignore the warnings.
 Be sure you pass the 2A tests before submitting Part 2A, so that you see something like this:
-
+```
 $ go test -run 2A
 Test (2A): initial election ...
   ... Passed --   3.5  3   58   16840    0
@@ -92,11 +94,12 @@ Test (2A): multiple elections ...
 PASS
 ok  	6.5840/raft	16.265s
 $
+```
 Each "Passed" line contains five numbers; these are the time that the test took in seconds, the number of Raft peers, the number of RPCs sent during the test, the total number of bytes in the RPC messages, and the number of log entries that Raft reports were committed. Your numbers will differ from those shown here. You can ignore the numbers if you like, but they may help you sanity-check the number of RPCs that your implementation sends. For all of labs 2, 3, and 4, the grading script will fail your solution if it takes more than 600 seconds for all of the tests (go test), or if any individual test takes more than 120 seconds.
 
 When we grade your submissions, we will run the tests without the -race flag. However, you should make sure that your code consistently passes the tests with the -race flag.
 
-Part 2B: log (hard)
+# Part 2B: log (hard)
 Implement the leader and follower code to append new log entries, so that the go test -run 2B tests pass.
 
 Run git pull to get the latest lab software.
@@ -107,7 +110,7 @@ Your code may have loops that repeatedly check for certain events. Don't have th
 Do yourself a favor for future labs and write (or re-write) code that's clean and clear. For ideas, re-visit our the Guidance page with tips on how to develop and debug your code.
 If you fail a test, look over the code for the test in config.go and test_test.go to get a better understanding what the test is testing. config.go also illustrates how the tester uses the Raft API.
 The tests for upcoming labs may fail your code if it runs too slowly. You can check how much real time and CPU time your solution uses with the time command. Here's typical output:
-
+```
 $ time go test -run 2B
 Test (2B): basic agreement ...
   ... Passed --   0.9  3   16    4572    3
@@ -132,8 +135,9 @@ real	0m35.899s
 user	0m2.556s
 sys	0m1.458s
 $
+```
 The "ok 6.5840/raft 35.557s" means that Go measured the time taken for the 2B tests to be 35.557 seconds of real (wall-clock) time. The "user 0m2.556s" means that the code consumed 2.556 seconds of CPU time, or time spent actually executing instructions (rather than waiting or sleeping). If your solution uses much more than a minute of real time for the 2B tests, or much more than 5 seconds of CPU time, you may run into trouble later on. Look for time spent sleeping or waiting for RPC timeouts, loops that run without sleeping or waiting for conditions or channel messages, or large numbers of RPCs sent.
-Part 2C: persistence (hard)
+# Part 2C: persistence (hard)
 If a Raft-based server reboots it should resume service where it left off. This requires that Raft keep persistent state that survives a reboot. The paper's Figure 2 mentions which state should be persistent.
 
 A real implementation would write Raft's persistent state to disk each time it changed, and would read the state from disk when restarting after a reboot. Your implementation won't use the disk; instead, it will save and restore persistent state from a Persister object (see persister.go). Whoever calls Raft.Make() supplies a Persister that initially holds Raft's most recently persisted state (if any). Raft should initialize its state from that Persister, and should use it to save its persistent state each time the state changes. Use the Persister's ReadRaftState() and Save() methods.
@@ -156,7 +160,7 @@ A few other hints:
 Run git pull to get the latest lab software.
 The 2C tests are more demanding than those for 2A or 2B, and failures may be caused by problems in your code for 2A or 2B.
 Your code should pass all the 2C tests (as shown below), as well as the 2A and 2B tests.
-
+```
 $ go test -run 2C
 Test (2C): basic persistence ...
   ... Passed --   5.0  3   86   22849    6
@@ -177,10 +181,12 @@ Test (2C): unreliable churn ...
 PASS
 ok  	6.5840/raft	123.564s
 $
+```
 It is a good idea to run the tests multiple times before submitting and check that each run prints PASS.
-
+```
 $ for i in {0..10}; do go test; done
-Part 2D: log compaction (hard)
+```
+# Part 2D: log compaction (hard)
 As things stand now, a rebooting server replays the complete Raft log in order to restore its state. However, it's not practical for a long-running service to remember the complete Raft log forever. Instead, you'll modify Raft to cooperate with services that persistently store a "snapshot" of their state from time to time, at which point Raft discards log entries that precede the snapshot. The result is a smaller amount of persistent data and faster restart. However, it's now possible for a follower to fall so far behind that the leader has discarded the log entries it needs to catch up; the leader must then send a snapshot plus the log starting at the time of the snapshot. Section 7 of the extended Raft paper outlines the scheme; you will have to design the details.
 
 You may find it helpful to refer to the diagram of Raft interactions to understand how the replicated service and Raft communicate.
@@ -212,7 +218,7 @@ Raft must discard old log entries in a way that allows the Go garbage collector 
 Even when the log is trimmed, your implemention still needs to properly send the term and index of the entry prior to new entries in AppendEntries RPCs; this may require saving and referencing the latest snapshot's lastIncludedTerm/lastIncludedIndex (consider whether this should be persisted).
 A reasonable amount of time to consume for the full set of Lab 2 tests (2A+2B+2C+2D) without -race is 6 minutes of real time and one minute of CPU time. When running with -race, it is about 10 minutes of real time and two minutes of CPU time.
 Your code should pass all the 2D tests (as shown below), as well as the 2A, 2B, and 2C tests.
-
+```
 $ go test -run 2D
 Test (2D): snapshots basic ...
   ... Passed --  11.6  3  176   61716  192
@@ -228,3 +234,4 @@ Test (2D): crash and restart all servers ...
   ... Passed --  19.5  3  268   81352   58
 PASS
 ok      6.5840/raft      293.456s
+```

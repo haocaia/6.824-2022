@@ -1,5 +1,7 @@
 package raft
 
+import "time"
+
 /*
 	1. 注意参数名大写
 */
@@ -67,6 +69,7 @@ type AppendEntriesArgs struct {
 type AppendEntriesReply struct {
 	Term    int
 	Success bool
+	Conflict bool
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -77,7 +80,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 	rf.receiveRPC = true
-	DPrintln("[%d] 收到 Term:[%d]的RPC, 当前Term: [%d]", rf.me, args.Term, rf.term)
+	//DPrintln("[%d] 收到 Term:[%d]的RPC, 当前Term: [%d]", rf.me, args.Term, rf.term)
 	if isOutDate(term, args.Term) {
 		rf.mu.Lock()
 		rf.TransToFollower(args.Term)
@@ -87,6 +90,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if !rf.log.exist(args.PrevLogIndex, args.PrevLogTerm) {
 		reply.Success = false
 		reply.Term = rf.term
+		reply.Conflict = true
 		return
 	}
 
@@ -100,25 +104,39 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
-	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	term := args.Term
-	if isOutDate(term, rf.term) {
-		return false
-	}
-	if isOutDate(rf.term, reply.Term) {
-		rf.mu.Lock()
-		rf.TransToFollower(reply.Term)
-		rf.mu.Unlock()
-		return false
-	}
+	for {
+		ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+		if isOutDate(term, rf.term) {
+			return false
+		}
+		if isOutDate(rf.term, reply.Term) {
+			rf.mu.Lock()
+			rf.TransToFollower(reply.Term)
+			rf.mu.Unlock()
+			return false
+		}
 
-	// TODO: 加速回溯
-	// 如果因为日志不匹配失败才需要回溯
-	if ok && reply.Success == false {
-		rf.nextIndex[server] -= 1
-	}
+		// TODO: 加速回溯
+		// 如果因为日志不匹配失败才需要回溯
+		if !ok {
+			time.Sleep(time.Duration(DEFAULT_SLEEP_MS) * time.Millisecond)
+		} else {
+			if reply.Success {
+				// update next index and match index
+				rf.nextIndex[server] = max(rf.nextIndex[server], args.Log.GetLastEntryIndex() + 1)
+				rf.matchIndex[server] = max(rf.matchIndex[server], args.Log.GetLastEntryIndex())
+				DPrintln("[%d]接收日志成功， 更新nextIndex = [%d], matchIndex = [%d]", server, rf.nextIndex[server], rf.matchIndex[server])
+				return true
+			} else if reply.Success == false {
+				if reply.Conflict {
+					rf.nextIndex[server] -= 1
+				}
+				time.Sleep(time.Duration(DEFAULT_SLEEP_MS) * time.Millisecond)
+			}
+		}
 
-	return ok
+	}
 }
 
 func TermCompare(RpcTerm, RaftTerm int) int {
