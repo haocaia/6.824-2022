@@ -18,7 +18,6 @@ package raft
 //
 
 import (
-	"fmt"
 	//	"bytes"
 	"math/rand"
 	"sync"
@@ -227,7 +226,7 @@ func (rf *Raft) commitListener() {
 		if isLeader(rf.role) {
 			update := false
 			index := max(rf.firstIndex, rf.commitIndex + 1)
-			if rf.log.GetEntryWithLogIndex(index).Term == term {
+			if rf.log.exist(index, term) && rf.log.GetEntryWithLogIndex(index).Term == term {
 				num := 0
 				numNeed := (len(rf.peers) + 1) / 2
 				for server := 0; server < len(rf.peers); server += 1 {
@@ -271,8 +270,11 @@ func (rf *Raft) applyListener() {
 					SnapshotIndex: 0,
 				}
 				rf.applyCh <- msg
-				DPrintln("[%d] apply msg: [%d]", rf.me, index)
+				DPrintln("[%d] apply msg: index=[%d], cmd=[%d]", rf.me, index, entry.Command)
 				success = true
+				DPrintln("[%d] apply [%d] 成功, 当前日志%v\n", rf.me, index, rf.log)
+				// 只有一个协程更新lastApply, 不需要加锁
+				rf.lastApplied += 1
 			}
 			if !success {
 				time.Sleep(time.Duration(ms) * time.Millisecond)
@@ -330,66 +332,20 @@ func (rf *Raft) sendAppendEntriesToAll(term int) {
 		if server == rf.me {
 			continue
 		}
-		if isOutDate(term, rf.term) {
-			return
-		}
-		if !isLeader(rf.role) {
-			return
-		}
 
-		rf.mu.Lock()
-		nextIndex := rf.nextIndex[server]
-		prevLogIndex := rf.log.GetPrevLogIndex(nextIndex)
-		prevLogTerm := rf.log.GetPrevLogTerm(nextIndex)
-		commitIndex := rf.commitIndex
-		rf.mu.Unlock()
-
-		if rf.log.GetLastEntryIndex() < nextIndex {
-			err := fmt.Sprintf("last log index < next index. [%d] < [%d]", rf.log.GetLastEntryIndex(), nextIndex)
-			panic(err)
-		}
-
-		args := &AppendEntriesArgs{
-			Term:         term,
-			Id:           rf.me,
-			PrevLogIndex: prevLogIndex,
-			PrevLogTerm:  prevLogTerm,
-			Log:          rf.log.GetLogFromLogIndex(nextIndex),
-			CommitIndex:  commitIndex,
-		}
-		reply := &AppendEntriesReply{
-			Term:    term,
-			Success: false,
-		}
-		if args.Log.empty() {
-			panic("新日志的内容为空")
-		}
-		DPrintln("[%d] 尝试给[%d]发送日志from [%d]", rf.me, server, args.Log.Entry[0].Index)
-		go rf.sendAppendEntries(server, args, reply)
+		go rf.sendAppendEntries(server, false)
 	}
 }
 
 func (rf *Raft) sendHeartToAll(term int) {
-	if isOutDate(term, rf.term) {
-		return
-	}
-	rf.mu.Lock()
-	args := &AppendEntriesArgs{
-		Term:         term,
-		Id:           rf.me,
-		PrevLogIndex: rf.log.GetLastEntryIndex(),
-		PrevLogTerm:  rf.log.GetLastEntryTerm(),
-		Log:          EmptyLog(),
-		CommitIndex:  rf.commitIndex,
-	}
-	rf.mu.Unlock()
-
 	for server := 0; server < len(rf.peers); server += 1 {
 		if server == rf.me {
 			continue
 		}
-		reply := &AppendEntriesReply{}
-		go rf.sendAppendEntries(server, args, reply)
+		if isOutDate(term, rf.term) {
+			return
+		}
+		go rf.sendAppendEntries(server, true)
 	}
 }
 
@@ -450,9 +406,8 @@ func (rf *Raft) startElection() {
 	for numReplied < len(rf.peers) && voteMe < numWin && !isOutDate(term, rf.term) && time.Now().Before(maxTime) {
 		time.Sleep(time.Duration(DEFAULT_SLEEP_MS) * time.Millisecond)
 	}
-	DPrintln("[%d] 在Term: [%d] 中的投票结果:\n共计选票: [%d]\n获得选票: [%d]\n", rf.me, args.Term, numReplied, voteMe)
+	//DPrintln("[%d] 在Term: [%d] 中的投票结果:\n共计选票: [%d]\n获得选票: [%d]\n", rf.me, args.Term, numReplied, voteMe)
 	if voteMe >= numWin && !isOutDate(term, rf.term) {
-		DPrintln("[%d] 在Term: [%d] 中成为Leader", rf.me, term)
 		rf.mu.Lock()
 		rf.TransToLeader(term)
 		rf.mu.Unlock()

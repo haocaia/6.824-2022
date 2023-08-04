@@ -1,6 +1,9 @@
 package raft
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 /*
 	1. 注意参数名大写
@@ -42,7 +45,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if rf.log.BeforeOrEqualOf(lastLogIndex, lastLogTerm) &&
 		(rf.vote == -1 || rf.vote == args.Id) {
 		rf.TransToCandidate(args.Id, args.Term)
-		DPrintln("[%d] 在Term: [%d] 中投票给 [%d]", rf.me, args.Term, args.Id)
+		DPrintln("[%d] 在Term: [%d] 中投票给 [%d], 候选人日志: index = [%d] term = [%d], 我方日志: index = [%d] term = [%d]", rf.me, args.Term, args.Id, lastLogIndex, lastLogTerm, rf.log.GetLastEntryIndex(), rf.log.GetLastEntryTerm())
 		reply.Term = raftTerm
 		reply.VoteGranted = true
 		rf.receiveRPC = true
@@ -74,9 +77,11 @@ type AppendEntriesReply struct {
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	term := rf.term
+	heart := rf.log.empty()
 	if isOutDate(args.Term, term) {
 		reply.Success = false
 		reply.Term = term
+		DPrintln("[%d] 接收过期的AppendEntries", rf.me)
 		return
 	}
 	rf.receiveRPC = true
@@ -88,33 +93,106 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	if !rf.log.exist(args.PrevLogIndex, args.PrevLogTerm) {
+		if !heart {
+			DPrintln("[%d] prev日志不存在. prevLogIndex=[%d], prevLogTerm=[%d], log=\n[%v]", rf.me, args.PrevLogIndex, args.PrevLogTerm, rf.log)
+		}
 		reply.Success = false
 		reply.Term = rf.term
 		reply.Conflict = true
+		DPrintln("[%d] 接收日志失败, PrevLogIndex = [%d], PrevLogTerm = [%d], 当前日志 = \n %v", rf.me, args.PrevLogIndex, args.PrevLogTerm, rf.log)
 		return
 	}
-
+	if !heart {
+		DPrintln("[%d] 接收日志成功, prevLog index = [%d], term = [%d], 当前日志 = \n%v\n新日志 = \n%v", rf.me, args.PrevLogIndex, args.PrevLogTerm, rf.log, args.Log)
+	}
 	rf.mu.Lock()
+	//DPrintln("[%d] 的最新日志=[%d], 正在合并新日志[%d]", rf.me, rf.log.GetLastEntryIndex(), args.Log.GetLastEntryIndex())
 	rf.log.merge(args.Log)
+	if !heart {
+		DPrintln("[%d] 日志合并成功，最新日志=[%d]", rf.me, rf.log.GetLastEntryIndex())
+	}
 	rf.mu.Unlock()
 
 	if args.CommitIndex > rf.commitIndex {
-		rf.commitIndex = min(args.CommitIndex, rf.log.GetLastEntryIndex())
+		oldCommitIndex := rf.commitIndex
+		latestLogIndex := args.PrevLogIndex
+		if !args.Log.empty() {
+			latestLogIndex = args.Log.GetLastEntryIndex()
+		}
+		rf.mu.Lock()
+		rf.commitIndex = min(args.CommitIndex, latestLogIndex)
+		rf.mu.Unlock()
+		DPrintln("[%d] 更新commit index:[%d] -> [%d]", rf.me, oldCommitIndex, rf.commitIndex)
 	}
+
+	reply.Success = true
+	reply.Conflict = false
+	reply.Term = term
 }
 
-func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
-	term := args.Term
+func (rf *Raft) sendAppendEntries(server int, isHeart bool) {
+	term := rf.term
+	if isOutDate(term, rf.term) {
+		return
+	}
+	if !isLeader(rf.role) {
+		return
+	}
 	for {
+		rf.mu.Lock()
+		nextIndex := rf.nextIndex[server]
+		prevLogIndex := rf.log.GetPrevLogIndex(nextIndex)
+		prevLogTerm := rf.log.GetPrevLogTerm(nextIndex)
+		commitIndex := rf.commitIndex
+		//DPrintln("[%d] 开始发rpc, nextIndex = [%d] prevLog index=[%d], term=[%d]", rf.me, nextIndex, prevLogIndex, prevLogTerm)
+		if !isHeart && rf.log.GetLastEntryIndex() + 1 < nextIndex {
+			err := fmt.Sprintf("last log index + 1 < next index. [%d] < [%d]", rf.log.GetLastEntryIndex() + 1, nextIndex)
+			panic(err)
+		}
+		var args *AppendEntriesArgs
+		if isHeart {
+			args = &AppendEntriesArgs{
+				Term:         term,
+				Id:           rf.me,
+				PrevLogIndex: prevLogIndex,
+				PrevLogTerm:  prevLogTerm,
+				Log:          EmptyLog(),
+				CommitIndex:  commitIndex,
+			}
+		} else {
+			args = &AppendEntriesArgs{
+				Term:         term,
+				Id:           rf.me,
+				PrevLogIndex: prevLogIndex,
+				PrevLogTerm:  prevLogTerm,
+				Log:          rf.log.GetLogFromLogIndex(nextIndex),
+				CommitIndex:  commitIndex,
+			}
+		}
+		rf.mu.Unlock()
+
+		reply := &AppendEntriesReply{
+			Term:    term,
+			Success: false,
+			Conflict: false,
+		}
+		if args.Log.size() > 0 {
+			DPrintln("[%d] 尝试给[%d]发送日志from [%d] to [%d] , prevLogIndex = [%d], prevLogTerm[%d]", rf.me, server, args.Log.Entry[0].Index,  args.Log.GetLastEntryIndex(),args.PrevLogIndex, args.PrevLogTerm)
+		} else {
+		//	DPrintln("[%d] 尝试给[%d]发送心跳, nextIndex = [%d], prevLogIndex = [%d], prevLogTerm[%d]", rf.me, server, rf.nextIndex[server], args.PrevLogIndex, args.PrevLogTerm)
+		}
 		ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 		if isOutDate(term, rf.term) {
-			return false
+			return
+		}
+		if !isLeader(rf.role) {
+			return
 		}
 		if isOutDate(rf.term, reply.Term) {
 			rf.mu.Lock()
 			rf.TransToFollower(reply.Term)
 			rf.mu.Unlock()
-			return false
+			return
 		}
 
 		// TODO: 加速回溯
@@ -124,18 +202,24 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 		} else {
 			if reply.Success {
 				// update next index and match index
+
 				rf.nextIndex[server] = max(rf.nextIndex[server], args.Log.GetLastEntryIndex() + 1)
 				rf.matchIndex[server] = max(rf.matchIndex[server], args.Log.GetLastEntryIndex())
-				DPrintln("[%d]接收日志成功， 更新nextIndex = [%d], matchIndex = [%d]", server, rf.nextIndex[server], rf.matchIndex[server])
-				return true
-			} else if reply.Success == false {
-				if reply.Conflict {
-					rf.nextIndex[server] -= 1
+				if !isHeart {
+					DPrintln("[%d]接收日志到 [%d] 成功， 更新nextIndex = [%d], matchIndex = [%d]", server, args.Log.GetLastEntryIndex(), rf.nextIndex[server], rf.matchIndex[server])
 				}
+				return
+			} else if reply.Success == false {
+				if reply.Conflict{
+					rf.nextIndex[server] = max(rf.nextIndex[server] - 1, 1)
+				}
+				//DPrintln("[%d]接收日志失败, nextIndex = [%d]", server, rf.nextIndex[server])
 				time.Sleep(time.Duration(DEFAULT_SLEEP_MS) * time.Millisecond)
 			}
 		}
-
+		if isHeart {
+			return
+		}
 	}
 }
 
@@ -152,6 +236,3 @@ func TermCompare(RpcTerm, RaftTerm int) int {
 	return 1
 }
 
-func isHeart(args *AppendEntriesArgs) bool {
-	return args.Log.empty()
-}

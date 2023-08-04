@@ -55,11 +55,11 @@ func (log *Log) BeforeOrEqualOf(index, term int) bool {
 	e := log.GetLastEntry()
 	currentIndex := e.Index
 	currentTerm := e.Term
-	if currentIndex < index {
+	if currentTerm < term {
 		return true
 	}
-	if currentIndex == index && currentTerm == term {
-		return true
+	if currentTerm == term {
+		return currentIndex <= index
 	}
 	return false
 }
@@ -134,7 +134,9 @@ func (log *Log) merge(newLog Log) {
 		startIndex += 1
 		i += 1
 	}
-
+	if i == newLog.size() {
+		return
+	}
 	result := append([]Entry{}, log.Entry[:startIndex]...)
 	result = append(result, newLog.Entry[i:]...)
 	log.Entry = result
@@ -152,7 +154,8 @@ func (log *Log) appendEntry(command interface{}, term int) int {
 }
 
 func (log *Log) GetPrevLogIndex(logIndex int) int {
-	i := log.index(max(0, logIndex - 1))
+	//DPrintln("日志: 获取logIndex=[%d]的前一个日志, 日志=[%v]", logIndex, log)
+	i := log.index(logIndex - 1)
 	if i == -1 {
 		return 0
 	}
@@ -164,9 +167,9 @@ func (log *Log) GetPrevLogIndex(logIndex int) int {
 }
 
 func (log *Log) GetPrevLogTerm(logIndex int) int {
-	i := log.index(max(0, logIndex - 1))
+	i := log.index(logIndex - 1)
 	if i == -1 {
-		return 0
+		return -1
 	}
 	if i >= log.size() {
 		err := fmt.Sprintf("GetPrevLogIndex out of bound. Expect i = [%d] but len = [%d]", i, log.size())
@@ -181,7 +184,7 @@ func (log *Log) GetLogFromLogIndex(logIndex int) Log {
 		err := fmt.Sprintf("GetLogFromLogIndex: logIndex[%d] is not in slice now.", logIndex)
 		panic(err)
 	}
-	if i >= log.size() {
+	if i > log.size() {
 		err := fmt.Sprintf("GetLogFromLogIndex out of bound. Expect i = [%d] but len = [%d]", i, log.size())
 		panic(err)
 	}
