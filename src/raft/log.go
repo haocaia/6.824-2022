@@ -102,13 +102,18 @@ func (log *Log) get(i int) Entry {
 	}
 	return log.Entry[i]
 }
-
-func (log *Log) exist(index, term int) bool {
+// 1 表示存在
+// 0 表示不存在index
+// -1 表示存在index但是term不匹配
+func (log *Log) exist(index, term int) int {
 	if log.GetLastEntryIndex() < index {
-		return false
+		return 0
 	}
 	i := log.index(index)
-	return term == log.get(i).Term
+	if term != log.get(i).Term {
+		return -1
+	}
+	return 1
 }
 
 func (log *Log) find(index, term int) int {
@@ -191,6 +196,42 @@ func (log *Log) GetLogFromLogIndex(logIndex int) Log {
 	newLog := EmptyLog()
 	newLog.Entry = append(newLog.Entry, log.Entry[i:]...)
 	return newLog
+}
+
+func (log *Log) FindFirstIndexWithTerm(term int) int {
+	l := 0
+	r := log.size() - 1
+	for l < r {
+		mid := (l + r) >> 1
+		midTerm := log.get(mid).Term
+		if midTerm < term {
+			l = mid + 1
+		} else {
+			r = mid
+		}
+	}
+	if log.get(l).Term != term {
+		return -1
+	}
+	return log.get(l).Term
+}
+
+func (log *Log) FindLastIndexWithTerm(term int) int {
+	l := 0
+	r := log.size() - 1
+	for l < r {
+		mid := (l + r + 1) >> 1
+		midTerm := log.get(mid).Term
+		if midTerm <= term {
+			l = mid
+		} else {
+			r = mid - 1
+		}
+	}
+	if log.get(l).Term != term {
+		return -1
+	}
+	return log.get(l).Term
 }
 
 func CreateLogWithOneEntry(command interface{}, index int, term int) Log {

@@ -73,6 +73,8 @@ type AppendEntriesReply struct {
 	Term    int
 	Success bool
 	Conflict bool
+	ConflictIndex int
+	ConflictTerm int
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -92,14 +94,35 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.mu.Unlock()
 	}
 
-	if !rf.log.exist(args.PrevLogIndex, args.PrevLogTerm) {
+	rf.mu.Lock()
+	lastLogIndex := rf.log.GetLastEntryIndex()
+	exist := rf.log.exist(args.PrevLogIndex, args.PrevLogTerm)
+	rf.mu.Unlock()
+
+	if exist != 1{
+		rf.mu.Lock()
 		if !heart {
 			DPrintln("[%d] prev日志不存在. prevLogIndex=[%d], prevLogTerm=[%d], log=\n[%v]", rf.me, args.PrevLogIndex, args.PrevLogTerm, rf.log)
 		}
 		reply.Success = false
 		reply.Term = rf.term
 		reply.Conflict = true
+		if exist == 0 {
+			reply.ConflictIndex = lastLogIndex
+			reply.ConflictTerm = -1
+		} else {
+			conflictTerm := rf.log.GetEntryWithLogIndex(lastLogIndex).Term
+			if conflictTerm == -1 {
+				err := fmt.Sprintf("[%d] conflictTerm = -1, log latest log index = [%d], rpc lastLogIndex = [%d]", rf.me, rf.log.GetLastEntryIndex(), lastLogIndex)
+				panic(err)
+			}
+			conflictIndex := rf.log.FindFirstIndexWithTerm(conflictTerm)
+			reply.ConflictTerm = conflictTerm
+			reply.ConflictIndex = conflictIndex
+		}
+
 		DPrintln("[%d] 接收日志失败, PrevLogIndex = [%d], PrevLogTerm = [%d], 当前日志 = \n %v", rf.me, args.PrevLogIndex, args.PrevLogTerm, rf.log)
+		rf.mu.Unlock()
 		return
 	}
 	if !heart {
@@ -211,7 +234,26 @@ func (rf *Raft) sendAppendEntries(server int, isHeart bool) {
 				return
 			} else if reply.Success == false {
 				if reply.Conflict{
-					rf.nextIndex[server] = max(rf.nextIndex[server] - 1, 1)
+					if reply.ConflictTerm == -1 {
+						// rf.nextIndex[server] = max(rf.nextIndex[server] - 1, 1)
+						rf.nextIndex[server] = max(reply.ConflictIndex, 1)
+					} else {
+						rf.mu.Lock()
+						index := rf.log.FindFirstIndexWithTerm(reply.ConflictTerm)
+						if index == -1 {
+							// 不存在term
+							rf.nextIndex[server] = max(reply.ConflictIndex, 1)
+						} else {
+							index = rf.log.FindLastIndexWithTerm(reply.ConflictTerm)
+							if index < 1 {
+								err := fmt.Sprintf("[%d] FindLastIndexWithTerm = -1", rf.me)
+								panic(err)
+							}
+							rf.nextIndex[server] = max(index + 1, 1)
+						}
+						rf.mu.Unlock()
+					}
+
 				}
 				//DPrintln("[%d]接收日志失败, nextIndex = [%d]", server, rf.nextIndex[server])
 				time.Sleep(time.Duration(DEFAULT_SLEEP_MS) * time.Millisecond)

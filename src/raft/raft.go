@@ -226,7 +226,7 @@ func (rf *Raft) commitListener() {
 		if isLeader(rf.role) {
 			update := false
 			index := max(rf.firstIndex, rf.commitIndex + 1)
-			if rf.log.exist(index, term) && rf.log.GetEntryWithLogIndex(index).Term == term {
+			if rf.log.exist(index, term) == 1 && rf.log.GetEntryWithLogIndex(index).Term == term {
 				num := 0
 				numNeed := (len(rf.peers) + 1) / 2
 				for server := 0; server < len(rf.peers); server += 1 {
