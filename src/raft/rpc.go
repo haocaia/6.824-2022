@@ -2,6 +2,7 @@ package raft
 
 import (
 	"fmt"
+	"math/rand"
 	"time"
 )
 
@@ -54,9 +55,37 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 }
 
-func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
-	return ok
+func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, voteMe *int, term int, numReplied *int, ) {
+	for {
+		var reply = &RequestVoteReply{
+			Term:        -1,
+			VoteGranted: false,
+		}
+		ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+		if !ok {
+			ms := DEFAULT_SLEEP_MS + (rand.Int63() % 10)
+			time.Sleep(time.Duration(ms) * time.Millisecond)
+			continue
+		}
+		//rf.mu.Lock()
+		*numReplied += 1
+		//rf.mu.Unlock()
+		if rf.term < reply.Term {
+			rf.mu.Lock()
+			rf.TransToFollower(reply.Term)
+			rf.mu.Unlock()
+			return
+		}
+		if isOutDate(term, rf.term) {
+			return
+		}
+		if reply.VoteGranted {
+			*voteMe += 1
+		}
+		return
+	}
+
+	return
 }
 
 // ----------------------AppendEntries-------------------------
@@ -121,12 +150,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			reply.ConflictIndex = conflictIndex
 		}
 
-		DPrintln("[%d] 接收日志失败, PrevLogIndex = [%d], PrevLogTerm = [%d], 当前日志 = \n %v", rf.me, args.PrevLogIndex, args.PrevLogTerm, rf.log)
+		DPrintln("[%d] 接收日志失败, PrevLogIndex = [%d], PrevLogTerm = [%d]", rf.me, args.PrevLogIndex, args.PrevLogTerm)
 		rf.mu.Unlock()
 		return
 	}
 	if !heart {
-		DPrintln("[%d] 接收日志成功, prevLog index = [%d], term = [%d], 当前日志 = \n%v\n新日志 = \n%v", rf.me, args.PrevLogIndex, args.PrevLogTerm, rf.log, args.Log)
+		DPrintln("[%d] 接收日志成功, prevLog index = [%d], term = [%d]", rf.me, args.PrevLogIndex, args.PrevLogTerm)
 	}
 	rf.mu.Lock()
 	//DPrintln("[%d] 的最新日志=[%d], 正在合并新日志[%d]", rf.me, rf.log.GetLastEntryIndex(), args.Log.GetLastEntryIndex())
@@ -167,7 +196,6 @@ func (rf *Raft) sendAppendEntries(server int, isHeart bool) {
 		prevLogIndex := rf.log.GetPrevLogIndex(nextIndex)
 		prevLogTerm := rf.log.GetPrevLogTerm(nextIndex)
 		commitIndex := rf.commitIndex
-		//DPrintln("[%d] 开始发rpc, nextIndex = [%d] prevLog index=[%d], term=[%d]", rf.me, nextIndex, prevLogIndex, prevLogTerm)
 		if !isHeart && rf.log.GetLastEntryIndex() + 1 < nextIndex {
 			err := fmt.Sprintf("last log index + 1 < next index. [%d] < [%d]", rf.log.GetLastEntryIndex() + 1, nextIndex)
 			panic(err)
@@ -200,7 +228,7 @@ func (rf *Raft) sendAppendEntries(server int, isHeart bool) {
 			Conflict: false,
 		}
 		if args.Log.size() > 0 {
-			DPrintln("[%d] 尝试给[%d]发送日志from [%d] to [%d] , prevLogIndex = [%d], prevLogTerm[%d]", rf.me, server, args.Log.Entry[0].Index,  args.Log.GetLastEntryIndex(),args.PrevLogIndex, args.PrevLogTerm)
+			DPrintln("[%d] 尝试给[%d]发送日志from [%d] , prevLogIndex = [%d], prevLogTerm[%d]", rf.me, server, nextIndex,args.PrevLogIndex, args.PrevLogTerm)
 		} else {
 		//	DPrintln("[%d] 尝试给[%d]发送心跳, nextIndex = [%d], prevLogIndex = [%d], prevLogTerm[%d]", rf.me, server, rf.nextIndex[server], args.PrevLogIndex, args.PrevLogTerm)
 		}

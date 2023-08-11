@@ -199,7 +199,7 @@ func (rf *Raft) ticker() {
 		}
 		// pause for a random amount of time between 50 and 350
 		// milliseconds.
-		ms := 50 + (rand.Int63() % 300)
+		ms := 50 + (rand.Int63() % 50)
 		time.Sleep(time.Duration(ms) * time.Millisecond)
 	}
 }
@@ -377,31 +377,10 @@ func (rf *Raft) startElection() {
 		if isOutDate(term, rf.term) {
 			return
 		}
-		go func(server int) {
-			reply := &RequestVoteReply{
-				Term:        -1,
-				VoteGranted: false,
-			}
-			rf.sendRequestVote(server, args, reply)
-			rf.mu.Lock()
-			numReplied += 1
-			rf.mu.Unlock()
-			if rf.term < reply.Term {
-				rf.mu.Lock()
-				rf.TransToFollower(reply.Term)
-				rf.mu.Unlock()
-				return
-			}
-			if isOutDate(term, rf.term) {
-				return
-			}
-			if reply.VoteGranted {
-				voteMe += 1
-			}
-		}(server)
+		go rf.sendRequestVote(server, args, &voteMe, term, &numReplied)
 	}
 
-	maxWaitMs := 360
+	maxWaitMs := 300 + (rand.Int63() % 100)
 	maxTime := time.Now().Add(time.Duration(maxWaitMs) * time.Millisecond)
 	for numReplied < len(rf.peers) && voteMe < numWin && !isOutDate(term, rf.term) && time.Now().Before(maxTime) {
 		time.Sleep(time.Duration(DEFAULT_SLEEP_MS) * time.Millisecond)

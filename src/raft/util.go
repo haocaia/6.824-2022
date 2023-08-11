@@ -4,7 +4,7 @@ import "log"
 
 // Debugging
 const Debug = false
-const DEFAULT_SLEEP_MS = 50
+const DEFAULT_SLEEP_MS = 25
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {

@@ -128,9 +128,18 @@ func (log *Log) merge(newLog Log) {
 	if newLog.empty() {
 		return
 	}
-	startIndex := log.find(newLog.get(0).Index, newLog.get(0).Term)
-	if startIndex == -1 {
+	exist := log.exist(newLog.get(0).Index, newLog.get(0).Term)
+	startIndex := -1
+	if exist == 1 {
+		startIndex = log.index(newLog.get(0).Index)
+		endExist := log.exist(newLog.GetLastEntryIndex(), newLog.GetLastEntryTerm())
+		if endExist == 1 {
+			return
+		}
+	} else if exist == 0 {
 		startIndex = log.size()
+	} else if startIndex == -1 {
+		startIndex = log.index(newLog.get(0).Index)
 	}
 
 	i := 0
@@ -142,9 +151,10 @@ func (log *Log) merge(newLog Log) {
 	if i == newLog.size() {
 		return
 	}
-	result := append([]Entry{}, log.Entry[:startIndex]...)
-	result = append(result, newLog.Entry[i:]...)
-	log.Entry = result
+	//result := append([]Entry{}, log.Entry[:startIndex]...)
+	//result = append(result, newLog.Entry[i:]...)
+	//log.Entry = result
+	log.Entry = append(log.Entry[:startIndex], newLog.Entry[i:]...)
 }
 
 func (log *Log) appendEntry(command interface{}, term int) int {
